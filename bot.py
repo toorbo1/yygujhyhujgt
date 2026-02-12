@@ -910,8 +910,8 @@ async def create_task_finish(update, context):
             await update.message.reply_text(error_text, parse_mode=ParseMode.HTML)
         else:
             await update.edit_message_text(error_text, parse_mode=ParseMode.HTML)
-
             
+
 async def create_task_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор типа задания"""
     query = update.callback_query
