@@ -672,6 +672,7 @@ async def create_task_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     context.user_data['task_desc'] = update.message.text
     
+    # ===== ВАЖНО: ВЫБОР ТИПА ЗАДАНИЯ =====
     keyboard = [
         [InlineKeyboardButton("📢 Канал", callback_data="task_type_channel")],
         [InlineKeyboardButton("📎 Пост", callback_data="task_type_post")],
@@ -679,12 +680,238 @@ async def create_task_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     await update.message.reply_text(
-        "🎯 Выберите <b>тип цели</b> задания:",
+        "🎯 <b>Выберите тип цели задания:</b>\n\n"
+        "• <b>Канал</b> - для подписки на канал\n"
+        "• <b>Пост</b> - для репоста/комментария\n"
+        "• <b>Ссылка</b> - для перехода по ссылке\n\n"
+        "Нажмите на кнопку ниже:",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return TASK_TYPE
 
+async def create_task_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор типа задания"""
+    query = update.callback_query
+    await query.answer()
+    
+    task_type = query.data.split('_')[2]  # channel, post, link
+    context.user_data['task_type'] = task_type
+    
+    type_names = {
+        'channel': '📢 Канал',
+        'post': '📎 Пост',
+        'link': '🔗 Ссылка'
+    }
+    
+    await query.edit_message_text(
+        f"✅ Выбран тип: <b>{type_names[task_type]}</b>\n\n"
+        f"🔗 Введите <b>цель</b> задания:\n\n"
+        f"• <b>Для канала:</b> @username или ссылка на канал\n"
+        f"• <b>Для поста:</b> ссылка на пост\n"
+        f"• <b>Для ссылки:</b> URL\n\n"
+        f"<i>Примеры:</i>\n"
+        f"• @example_channel\n"
+        f"• https://t.me/example/123\n"
+        f"• https://example.com\n\n"
+        f"(или отправьте /cancel для отмены)",
+        parse_mode=ParseMode.HTML
+    )
+    return TARGET
+
+async def create_task_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение цели задания"""
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+    
+    # Проверяем, что тип задания был выбран
+    if 'task_type' not in context.user_data:
+        await update.message.reply_text(
+            "❌ Ошибка: не выбран тип задания. Начните создание заново.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("➕ Создать задание", callback_data="admin_create_task")
+            ]])
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    context.user_data['target'] = update.message.text
+    
+    await update.message.reply_text(
+        "💰 Введите <b>награду</b> за выполнение (в рублях):\n\n"
+        "Например: 100 или 150.50\n\n"
+        "(или отправьте /cancel для отмены)",
+        parse_mode=ParseMode.HTML
+    )
+    return REWARD
+
+async def create_task_reward(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение награды"""
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    try:
+        reward = float(update.message.text)
+        if reward <= 0:
+            await update.message.reply_text("❌ Награда должна быть положительным числом:")
+            return REWARD
+        context.user_data['reward'] = reward
+    except ValueError:
+        await update.message.reply_text("❌ Введите число (например, 100.50):")
+        return REWARD
+    
+    await update.message.reply_text(
+        "📌 Введите <b>требования</b> к выполнению:\n\n"
+        "Например: подписаться на канал, сделать репост и т.д.\n"
+        "Или отправьте 'нет', если требований нет\n\n"
+        "(или отправьте /cancel для отмены)",
+        parse_mode=ParseMode.HTML
+    )
+    return REQUIREMENTS
+
+async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение требований и выбор категории"""
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+    
+    # Проверяем наличие всех необходимых данных
+    required_fields = ['task_title', 'task_desc', 'task_type', 'target', 'reward']
+    missing_fields = [field for field in required_fields if field not in context.user_data]
+    
+    if missing_fields:
+        await update.message.reply_text(
+            f"❌ Ошибка: отсутствуют данные ({', '.join(missing_fields)}). Начните создание заново.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("➕ Создать задание", callback_data="admin_create_task")
+            ]])
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    req = update.message.text
+    context.user_data['requirements'] = req if req.lower() != 'нет' else ""
+    
+    cats = await CategoryManager.get_all()
+    
+    if not cats:
+        # Если нет категорий, создаем задание без категории
+        context.user_data['category_id'] = None
+        await create_task_finish(update, context)
+        context.user_data.clear()
+        return ConversationHandler.END
+    
+    keyboard = []
+    for cat in cats:
+        prefix = "  " * (1 if cat['parent_id'] else 0)
+        keyboard.append([InlineKeyboardButton(f"{prefix}{cat['name']}", callback_data=f"task_cat_{cat['id']}")])
+    
+    keyboard.append([InlineKeyboardButton("⏭ Без категории", callback_data="task_cat_none")])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="task_cat_cancel")])
+    
+    await update.message.reply_text(
+        "📁 Выберите <b>категорию</b> задания:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return TASK_CATEGORY
+
+async def create_task_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор категории и финиш"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "task_cat_cancel":
+        await query.edit_message_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    if query.data == "task_cat_none":
+        context.user_data['category_id'] = None
+    else:
+        cat_id = int(query.data.split('_')[-1])
+        context.user_data['category_id'] = cat_id
+    
+    await create_task_finish(query, context)
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def create_task_finish(update, context):
+    """Завершение создания задания"""
+    try:
+        title = context.user_data.get('task_title', '')
+        desc = context.user_data.get('task_desc', '')
+        task_type = context.user_data.get('task_type', '')
+        target = context.user_data.get('target', '')
+        reward = context.user_data.get('reward', 0)
+        req = context.user_data.get('requirements', '')
+        cat_id = context.user_data.get('category_id')
+        
+        created_by = update.effective_user.id
+        
+        # Проверяем все обязательные поля
+        if not all([title, desc, task_type, target, reward]):
+            error_text = "❌ Ошибка: не все обязательные поля заполнены.\n\n"
+            if not title: error_text += "• Отсутствует название\n"
+            if not desc: error_text += "• Отсутствует описание\n"
+            if not task_type: error_text += "• Не выбран тип задания\n"
+            if not target: error_text += "• Не указана цель\n"
+            if not reward: error_text += "• Не указана награда\n"
+            
+            if isinstance(update, Update):
+                await update.message.reply_text(error_text)
+            else:
+                await update.edit_message_text(error_text)
+            return
+
+        task_id = await TaskManager.create(
+            title, desc, task_type, target, reward,
+            created_by, cat_id, req
+        )
+        
+        type_names = {
+            'channel': '📢 Канал',
+            'post': '📎 Пост',
+            'link': '🔗 Ссылка'
+        }
+        
+        text = (
+            f"✅ <b>Задание успешно создано!</b>\n\n"
+            f"📋 <b>Название:</b> {title}\n"
+            f"📝 <b>Описание:</b> {desc[:100]}{'...' if len(desc) > 100 else ''}\n"
+            f"🎯 <b>Тип:</b> {type_names.get(task_type, task_type)}\n"
+            f"🔗 <b>Цель:</b> {target}\n"
+            f"💰 <b>Награда:</b> {reward} ₽\n"
+            f"📌 <b>Требования:</b> {req or 'нет'}\n"
+            f"🆔 <b>ID задания:</b> <code>{task_id}</code>\n\n"
+            f"Задание доступно для пользователей в разделе 'Доступные задания'."
+        )
+        
+        if isinstance(update, Update):
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        else:
+            await update.edit_message_text(text, parse_mode=ParseMode.HTML)
+            
+        logger.info(f"✅ Задание {task_id} успешно создано администратором {created_by}")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при создании задания: {e}")
+        error_text = (
+            "❌ <b>Ошибка при создании задания</b>\n\n"
+            f"Текст ошибки: {str(e)[:100]}\n\n"
+            "Попробуйте создать задание заново."
+        )
+        if isinstance(update, Update):
+            await update.message.reply_text(error_text, parse_mode=ParseMode.HTML)
+        else:
+            await update.edit_message_text(error_text, parse_mode=ParseMode.HTML)
+
+            
 async def create_task_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор типа задания"""
     query = update.callback_query
