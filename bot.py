@@ -39,14 +39,6 @@ logger = logging.getLogger(__name__)
 CATEGORY_NAME, CATEGORY_PARENT = range(2)
 TASK_TITLE, TASK_DESC, TASK_TYPE, TARGET, REWARD, REQUIREMENTS, TASK_CATEGORY = range(7)
 
-# ==================== ДЕКОРАТОР ПРОВЕРКИ АДМИНА ====================
-async def admin_required(update: Update, context: ContextTypes.DEFAULT_TYPE, func):
-    user_id = update.effective_user.id
-    if not await AdminManager.is_admin(user_id):
-        await update.message.reply_text("⛔ У вас нет прав администратора.")
-        return None
-    return await func(update, context)
-
 # ==================== ОБЩИЕ КОМАНДЫ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -85,10 +77,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👤 Профиль", callback_data="profile"),
          InlineKeyboardButton("❓ Помощь", callback_data="help")]
     ]
-    await update.message.reply_text(
-        welcome_text,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    if update.message:
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.callback_query.message.reply_text(
+            welcome_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
@@ -104,28 +102,38 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "4. Приводи людей по своей ссылке и зарабатывай\n\n"
         "По всем вопросам: @support"
     )
-    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+    if update.message:
+        await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+    else:
+        await update.callback_query.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = await UserManager.get(user_id)
     if not user:
-        await update.message.reply_text("❌ Профиль не найден. Введите /start для регистрации.")
+        if update.message:
+            await update.message.reply_text("❌ Профиль не найден. Введите /start для регистрации.")
+        else:
+            await update.callback_query.message.reply_text("❌ Профиль не найден. Введите /start для регистрации.")
         return
     stats = await UserManager.get_stats(user_id)
+    joined_date = user['joined_date'].strftime('%d.%m.%Y') if user['joined_date'] else 'неизвестно'
     text = (
         f"👤 <b>Профиль</b>\n\n"
         f"ID: {user_id}\n"
         f"Имя: {user['first_name']}\n"
         f"Username: @{user['username'] if user['username'] else 'нет'}\n"
-        f"Дата регистрации: {user['joined_date'].strftime('%d.%m.%Y')}\n\n"
+        f"Дата регистрации: {joined_date}\n\n"
         f"📊 <b>Статистика</b>\n"
         f"✅ Выполнено заданий: {stats['completed_count']}\n"
         f"⚡ Активных заданий: {stats['active_count']}\n"
         f"💰 Заработано: {stats['total_earned']} ₽\n"
         f"⭐ Рейтинг: {stats['rating']}"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    else:
+        await update.callback_query.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать доступные задания с фильтром по категориям"""
@@ -136,28 +144,40 @@ async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard.append([InlineKeyboardButton("📋 Все задания", callback_data="all_tasks")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_main")])
 
-    await update.message.reply_text(
-        "📁 Выберите категорию задания:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    if update.message:
+        await update.message.reply_text(
+            "📁 Выберите категорию задания:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.callback_query.message.reply_text(
+            "📁 Выберите категорию задания:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     tasks_list = await TaskManager.get_user_tasks(user_id)
     if not tasks_list:
-        await update.message.reply_text("📭 У вас пока нет взятых заданий.")
+        if update.message:
+            await update.message.reply_text("📭 У вас пока нет взятых заданий.")
+        else:
+            await update.callback_query.message.reply_text("📭 У вас пока нет взятых заданий.")
         return
 
     text = "📋 <b>Ваши задания</b>\n\n"
     for task in tasks_list:
-        status_emoji = "✅" if task['completed'] else "⏳"
+        status_emoji = "✅" if task.get('completed', False) else "⏳"
         text += f"{status_emoji} <b>{task['title']}</b>\n"
         text += f"ID: <code>{task['task_id']}</code>\n"
-        text += f"Статус: {'Выполнено' if task['completed'] else 'В работе'}\n"
-        if task['earned']:
+        text += f"Статус: {'Выполнено' if task.get('completed', False) else 'В работе'}\n"
+        if task.get('earned'):
             text += f"Заработано: {task['earned']} ₽\n"
         text += "\n"
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    else:
+        await update.callback_query.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 # ==================== КОМАНДЫ АДМИНИСТРАТОРОВ ====================
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,6 +208,7 @@ async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У вас нет прав администратора.")
         return
     admins = await AdminManager.get_all_admins()
     text = "👑 <b>Список администраторов</b>\n\n"
@@ -199,6 +220,7 @@ async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Управление категориями ---
 async def categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У вас нет прав администратора.")
         return
     keyboard = [
         [InlineKeyboardButton("➕ Создать категорию", callback_data="admin_add_category")],
@@ -383,7 +405,9 @@ async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT
     cats = await CategoryManager.get_all()
     if not cats:
         context.user_data['category_id'] = None
-        return await create_task_finish(update, context)
+        await create_task_finish(update, context)
+        context.user_data.clear()
+        return ConversationHandler.END
     
     keyboard = []
     for cat in cats:
@@ -440,6 +464,7 @@ async def create_task_finish(update, context):
 # --- Выдача рабочей ссылки админом ---
 async def give_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У вас нет прав администратора.")
         return
     try:
         task_id = context.args[0]
@@ -447,12 +472,15 @@ async def give_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except IndexError:
         await update.message.reply_text("Использование: /give_link <task_id> <ссылка>")
         return
+    
     pending = await PendingManager.get(task_id)
     if not pending:
         await update.message.reply_text("❌ Задание не найдено в ожидающих или уже обработано.")
         return
+    
     await TaskManager.set_work_link(task_id, work_link)
     await PendingManager.mark_processed(task_id)
+    
     try:
         await context.bot.send_message(
             pending['user_id'],
@@ -462,10 +490,12 @@ async def give_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение пользователю {pending['user_id']}: {e}")
+    
     await update.message.reply_text(f"✅ Ссылка выдана для задания {task_id}.")
 
 async def pending_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У вас нет прав администратора.")
         return
     pendings = await TaskManager.get_pending_links()
     if not pendings:
@@ -482,6 +512,7 @@ async def pending_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У вас нет прав администратора.")
         return
     stats = await StatsManager.get_global()
     text = (
@@ -501,14 +532,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    # Пропускаем админские callback'и, которые обрабатываются в ConversationHandler
-    if data in ["admin_add_category", "cat_parent_none", "cat_parent_select", "cancel_category"]:
-        return ConversationHandler.END  # Не обрабатываем здесь, пусть ConversationHandler работает
-    
-    if data.startswith("cat_parent_"):
-        return ConversationHandler.END
-        
+    # Сохраняем информацию о чате для последующего использования
+    context.user_data['chat_id'] = update.effective_chat.id
+    context.user_data['message_id'] = query.message.message_id
+
     if data == "back_main":
+        # Создаем новый Update объект для start
         await start(update, context)
         return
     elif data == "profile":
@@ -546,13 +575,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, category_id: Optional[int]):
+    query = update.callback_query
     tasks_list = await TaskManager.get_available(category_id)
+    
     if not tasks_list:
-        await context.bot.send_message(
-            update.effective_chat.id,
+        await query.edit_message_text(
             "📭 В этой категории пока нет доступных заданий."
         )
         return
+    
+    # Отправляем каждое задание отдельным сообщением
     for task in tasks_list:
         text = (
             f"<b>{task['title']}</b>\n"
@@ -562,34 +594,36 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, categor
             f"📌 Требования: {task['requirements'] or 'нет'}"
         )
         keyboard = [[InlineKeyboardButton("✅ Взять задание", callback_data=f"take_{task['task_id']}")]]
-        await context.bot.send_message(
-            update.effective_chat.id,
+        await query.message.reply_text(
             text,
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+    
+    # Удаляем сообщение с выбором категории
+    await query.message.delete()
 
 async def take_task(update: Update, context: ContextTypes.DEFAULT_TYPE, task_id: str):
+    query = update.callback_query
     user_id = update.effective_user.id
+    
     user = await UserManager.get(user_id)
     if not user:
-        await context.bot.send_message(
-            update.effective_chat.id,
+        await query.edit_message_text(
             "❌ Сначала зарегистрируйтесь через /start"
         )
         return
+    
     task = await TaskManager.get_by_id(task_id)
     if not task or not task['available']:
-        await context.bot.send_message(
-            update.effective_chat.id,
+        await query.edit_message_text(
             "❌ Это задание уже недоступно."
         )
         return
 
     success = await TaskManager.assign(task_id, user_id)
     if not success:
-        await context.bot.send_message(
-            update.effective_chat.id,
+        await query.edit_message_text(
             "❌ Не удалось взять задание. Попробуйте позже."
         )
         return
@@ -618,8 +652,7 @@ async def take_task(update: Update, context: ContextTypes.DEFAULT_TYPE, task_id:
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение в группу {group_chat}: {e}")
 
-    await context.bot.send_message(
-        update.effective_chat.id,
+    await query.edit_message_text(
         f"✅ Вы взяли задание «{task['title']}»!\n\n"
         f"🔗 Ваша персональная ссылка для приглашений:\n<code>{tracking_link}</code>\n\n"
         f"⏳ Ожидайте, пока администратор выдаст рабочую ссылку. Обычно это занимает несколько минут.\n"
@@ -629,37 +662,39 @@ async def take_task(update: Update, context: ContextTypes.DEFAULT_TYPE, task_id:
 
 # ==================== АДМИН: УПРАВЛЕНИЕ КАТЕГОРИЯМИ ====================
 async def list_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
     cats = await CategoryManager.get_all()
     if not cats:
-        await context.bot.send_message(update.effective_chat.id, "📭 Категории отсутствуют.")
+        await query.edit_message_text("📭 Категории отсутствуют.")
         return
     text = "📁 <b>Все категории:</b>\n"
     for cat in cats:
         indent = "  " * (2 if cat['parent_id'] else 0)
         text += f"{indent}• {cat['name']} (ID: {cat['id']})\n"
-    await context.bot.send_message(update.effective_chat.id, text, parse_mode=ParseMode.HTML)
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML)
 
 async def delete_category_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
     cats = await CategoryManager.get_all()
     if not cats:
-        await context.bot.send_message(update.effective_chat.id, "📭 Нет категорий для удаления.")
+        await query.edit_message_text("📭 Нет категорий для удаления.")
         return
     keyboard = []
     for cat in cats:
         keyboard.append([InlineKeyboardButton(cat['name'], callback_data=f"delcat_{cat['id']}")])
     keyboard.append([InlineKeyboardButton("🔙 Отмена", callback_data="admin_back")])
-    await context.bot.send_message(
-        update.effective_chat.id,
+    await query.edit_message_text(
         "Выберите категорию для удаления:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def delete_category(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_id: int):
+    query = update.callback_query
     success = await CategoryManager.delete(cat_id)
     if success:
-        await context.bot.send_message(update.effective_chat.id, f"✅ Категория удалена.")
+        await query.edit_message_text(f"✅ Категория удалена.")
     else:
-        await context.bot.send_message(update.effective_chat.id, "❌ Нельзя удалить категорию, у которой есть подкатегории.")
+        await query.edit_message_text("❌ Нельзя удалить категорию, у которой есть подкатегории.")
 
 # ==================== ОТМЕНА ====================
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -732,6 +767,7 @@ def main():
     application.add_handler(conv_add_category)
 
     # ---- Callback обработчик ----
+    # Важно: добавляем его ПОСЛЕ ConversationHandler'ов
     application.add_handler(CallbackQueryHandler(button_handler))
 
     # ---- Ошибки ----

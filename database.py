@@ -221,7 +221,7 @@ class AdminManager:
             return True
         async with Database._pool.acquire() as conn:
             val = await conn.fetchval('SELECT is_admin FROM users WHERE user_id = $1', user_id)
-            return bool(val)
+            return bool(val) if val is not None else False
 
     @staticmethod
     async def is_main_admin(user_id: int) -> bool:
@@ -490,8 +490,8 @@ class StatsManager:
     @staticmethod
     async def get_global() -> dict:
         async with Database._pool.acquire() as conn:
-            total_users = await conn.fetchval('SELECT COUNT(*) FROM users')
-            total_tasks = await conn.fetchval('SELECT COUNT(*) FROM tasks')
+            total_users = await conn.fetchval('SELECT COUNT(*) FROM users') or 0
+            total_tasks = await conn.fetchval('SELECT COUNT(*) FROM tasks') or 0
             completed_tasks = await conn.fetchval('SELECT COUNT(*) FROM tasks WHERE completed = TRUE') or 0
             total_payout = await conn.fetchval('SELECT COALESCE(SUM(reward), 0) FROM tasks WHERE completed = TRUE') or 0
             pending_links = await conn.fetchval('SELECT COUNT(*) FROM pending_links WHERE processed = FALSE') or 0
