@@ -215,14 +215,23 @@ async def categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_category_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Введите название новой категории:")
+    await query.edit_message_text(
+        "Введите название новой категории:\n\n"
+        "(или отправьте /cancel для отмены)"
+    )
     return CATEGORY_NAME
 
 async def add_category_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание категории отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
     context.user_data['category_name'] = update.message.text
     keyboard = [
         [InlineKeyboardButton("📁 Корневая категория", callback_data="cat_parent_none")],
-        [InlineKeyboardButton("🔽 Подкатегория", callback_data="cat_parent_select")]
+        [InlineKeyboardButton("🔽 Подкатегория", callback_data="cat_parent_select")],
+        [InlineKeyboardButton("🔙 Отмена", callback_data="cancel_category")]
     ]
     await update.message.reply_text(
         "Выберите тип категории:",
@@ -233,91 +242,156 @@ async def add_category_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_category_parent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
     if query.data == "cat_parent_none":
         parent_id = None
-        name = context.user_data['category_name']
+        name = context.user_data.get('category_name', 'Без названия')
         await CategoryManager.create(name, parent_id, update.effective_user.id)
         await query.edit_message_text(f"✅ Категория «{name}» создана!")
+        context.user_data.clear()
         return ConversationHandler.END
+        
     elif query.data == "cat_parent_select":
         cats = await CategoryManager.get_children(None)
         if not cats:
             await query.edit_message_text("❌ Нет корневых категорий. Сначала создайте корневую.")
+            context.user_data.clear()
             return ConversationHandler.END
+            
         keyboard = []
         for cat in cats:
             keyboard.append([InlineKeyboardButton(cat['name'], callback_data=f"cat_parent_{cat['id']}")])
+        keyboard.append([InlineKeyboardButton("🔙 Отмена", callback_data="cancel_category")])
+        
         await query.edit_message_text(
             "Выберите родительскую категорию:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return CATEGORY_PARENT
+        
     elif query.data.startswith("cat_parent_"):
         parent_id = int(query.data.split('_')[-1])
-        name = context.user_data['category_name']
+        name = context.user_data.get('category_name', 'Без названия')
         await CategoryManager.create(name, parent_id, update.effective_user.id)
         await query.edit_message_text(f"✅ Подкатегория «{name}» создана!")
+        context.user_data.clear()
         return ConversationHandler.END
+        
+    elif query.data == "cancel_category":
+        await query.edit_message_text("❌ Создание категории отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
     return ConversationHandler.END
 
 # --- Создание задания ---
 async def create_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
-        return
-    await update.message.reply_text("Введите название задания:")
+        await update.message.reply_text("⛔ У вас нет прав администратора.")
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "Введите название задания:\n\n"
+        "(или отправьте /cancel для отмены)"
+    )
     return TASK_TITLE
 
 async def create_task_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
     context.user_data['task_title'] = update.message.text
-    await update.message.reply_text("Введите описание задания:")
+    await update.message.reply_text(
+        "Введите описание задания:\n\n"
+        "(или отправьте /cancel для отмены)"
+    )
     return TASK_DESC
 
 async def create_task_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
     context.user_data['task_desc'] = update.message.text
     await update.message.reply_text(
         "Выберите тип цели:\n"
         "channel - канал\n"
         "post - пост\n"
-        "link - ссылка"
+        "link - ссылка\n\n"
+        "(или отправьте /cancel для отмены)"
     )
     return TASK_TYPE
 
 async def create_task_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
     t = update.message.text.lower()
     if t not in ['channel', 'post', 'link']:
         await update.message.reply_text("Пожалуйста, введите channel, post или link.")
         return TASK_TYPE
     context.user_data['task_type'] = t
-    await update.message.reply_text("Введите цель (username канала, ссылку на пост и т.д.):")
+    await update.message.reply_text(
+        "Введите цель (username канала, ссылку на пост и т.д.):\n\n"
+        "(или отправьте /cancel для отмены)"
+    )
     return TARGET
 
 async def create_task_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
     context.user_data['target'] = update.message.text
-    await update.message.reply_text("Введите награду за выполнение (число):")
+    await update.message.reply_text(
+        "Введите награду за выполнение (число):\n\n"
+        "(или отправьте /cancel для отмены)"
+    )
     return REWARD
 
 async def create_task_reward(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
     try:
         reward = float(update.message.text)
         context.user_data['reward'] = reward
     except ValueError:
         await update.message.reply_text("Введите число (например, 100.50):")
         return REWARD
-    await update.message.reply_text("Введите требования к выполнению (или отправьте 'нет'):")
+    await update.message.reply_text(
+        "Введите требования к выполнению (или отправьте 'нет'):\n\n"
+        "(или отправьте /cancel для отмены)"
+    )
     return REQUIREMENTS
 
 async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
     req = update.message.text
     context.user_data['requirements'] = req if req.lower() != 'нет' else ""
     cats = await CategoryManager.get_all()
     if not cats:
         context.user_data['category_id'] = None
         return await create_task_finish(update, context)
+    
     keyboard = []
     for cat in cats:
         prefix = "  " * (1 if cat['parent_id'] else 0)
         keyboard.append([InlineKeyboardButton(f"{prefix}{cat['name']}", callback_data=f"task_cat_{cat['id']}")])
     keyboard.append([InlineKeyboardButton("⏭ Без категории", callback_data="task_cat_none")])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="task_cat_cancel")])
+    
     await update.message.reply_text(
         "Выберите категорию задания:",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -328,27 +402,34 @@ async def create_task_category(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     data = query.data
+    
+    if data == "task_cat_cancel":
+        await query.edit_message_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
     if data == "task_cat_none":
         context.user_data['category_id'] = None
     else:
         cat_id = int(data.split('_')[-1])
         context.user_data['category_id'] = cat_id
+    
     await create_task_finish(query, context)
+    context.user_data.clear()
     return ConversationHandler.END
 
 async def create_task_finish(update, context):
-    title = context.user_data['task_title']
-    desc = context.user_data['task_desc']
-    task_type = context.user_data['task_type']
-    target = context.user_data['target']
-    reward = context.user_data['reward']
+    title = context.user_data.get('task_title', '')
+    desc = context.user_data.get('task_desc', '')
+    task_type = context.user_data.get('task_type', '')
+    target = context.user_data.get('target', '')
+    reward = context.user_data.get('reward', 0)
     req = context.user_data.get('requirements', '')
     cat_id = context.user_data.get('category_id')
-    created_by = update.effective_user.id
 
     task_id = await TaskManager.create(
         title, desc, task_type, target, reward,
-        created_by, cat_id, req
+        update.effective_user.id, cat_id, req
     )
     text = f"✅ Задание создано!\nID: <code>{task_id}</code>"
     if isinstance(update, Update):
@@ -420,6 +501,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
+    # Пропускаем админские callback'и, которые обрабатываются в ConversationHandler
+    if data in ["admin_add_category", "cat_parent_none", "cat_parent_select", "cancel_category"]:
+        return ConversationHandler.END  # Не обрабатываем здесь, пусть ConversationHandler работает
+    
+    if data.startswith("cat_parent_"):
+        return ConversationHandler.END
+        
     if data == "back_main":
         await start(update, context)
         return
@@ -443,9 +531,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id = data.split('_')[1]
         await take_task(update, context, task_id)
         return
-    elif data == "admin_add_category":
-        await add_category_start(update, context)
-        return
     elif data == "admin_list_categories":
         await list_categories(update, context)
         return
@@ -455,6 +540,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("delcat_"):
         cat_id = int(data.split('_')[1])
         await delete_category(update, context, cat_id)
+        return
+    elif data == "admin_back":
+        await start(update, context)
         return
 
 async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, category_id: Optional[int]):
@@ -573,6 +661,12 @@ async def delete_category(update: Update, context: ContextTypes.DEFAULT_TYPE, ca
     else:
         await context.bot.send_message(update.effective_chat.id, "❌ Нельзя удалить категорию, у которой есть подкатегории.")
 
+# ==================== ОТМЕНА ====================
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Операция отменена.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
 # ==================== ОШИБКИ ====================
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}")
@@ -609,7 +703,6 @@ def main():
     application.add_handler(CommandHandler("give_link", give_link_command))
     application.add_handler(CommandHandler("pending", pending_list))
     application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("create_task", create_task_start))
 
     # ---- Создание задания (Conversation) ----
     conv_create_task = ConversationHandler(
@@ -623,7 +716,7 @@ def main():
             REQUIREMENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_requirements)],
             TASK_CATEGORY: [CallbackQueryHandler(create_task_category, pattern="^task_cat_")],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
     application.add_handler(conv_create_task)
 
@@ -632,9 +725,9 @@ def main():
         entry_points=[CallbackQueryHandler(add_category_start, pattern="^admin_add_category$")],
         states={
             CATEGORY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_category_name)],
-            CATEGORY_PARENT: [CallbackQueryHandler(add_category_parent, pattern="^(cat_parent_none|cat_parent_\\d+|cat_parent_select)$")],
+            CATEGORY_PARENT: [CallbackQueryHandler(add_category_parent, pattern="^(cat_parent_none|cat_parent_\\d+|cat_parent_select|cancel_category)$")],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
     application.add_handler(conv_add_category)
 
