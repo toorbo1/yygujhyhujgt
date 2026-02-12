@@ -747,7 +747,7 @@ async def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_work_link))
     
     print("=" * 50)
-    print("✅ БОТ TRAFFIC TEAM УСПЕШНО ЗАПУЩЕН!")
+    print("✅ БОТ TRAFFIC TEAM УСПЕШНО ЗАПУЩЕН! ")
     print("=" * 50)
     print(f"👑 Главный админ: {MAIN_ADMIN_ID}")
     print(f"📢 Группа уведомлений: {TASK_NOTIFICATION_GROUP}")
