@@ -1,0 +1,24 @@
+# Virtual Environment
+venv/
+env/
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Railway
+.railway/
+
+# Logs
+*.log
+
+# Не игнорируем .env.example
+!.env.example
