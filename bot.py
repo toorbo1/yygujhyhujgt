@@ -3,7 +3,7 @@ import logging
 import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
@@ -18,7 +18,7 @@ from database import (
     Database, UserManager, AdminManager, CategoryManager,
     TaskManager, TrackingManager, PendingManager, StatsManager
 )
-
+WELCOME_VIDEO_PATH = os.path.join(os.path.dirname(__file__), "video.mp4")
 # ==================== НАСТРОЙКИ ====================
 TOKEN = os.environ.get('BOT_TOKEN')
 MAIN_ADMIN_ID = int(os.environ.get('MAIN_ADMIN_ID', '8358009538'))
@@ -80,16 +80,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin:
         keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data="admin_panel")])
 
-    if update.message:
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        await update.callback_query.message.reply_text(
-            welcome_text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+    # Открываем локальный видео-файл и отправляем как анимацию
+    with open(WELCOME_VIDEO_PATH, 'rb') as video_file:
+        if update.message:
+            await update.message.reply_animation(
+                animation=InputFile(video_file, filename='video.mp4'),
+                caption=welcome_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await update.callback_query.message.reply_animation(
+                animation=InputFile(video_file, filename='video.mp4'),
+                caption=welcome_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
