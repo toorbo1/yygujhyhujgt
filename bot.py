@@ -521,7 +521,7 @@ async def list_categories_callback(update: Update, context: ContextTypes.DEFAULT
     if not cats:
         await query.edit_message_text(
             "📭 Категории отсутствуют.\n\nСоздайте первую категорию через 'Создать категорию'.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("🔙 Назад", callback_data="admin_categories_menu")
             ]])
         )
@@ -552,7 +552,7 @@ async def delete_category_prompt(update: Update, context: ContextTypes.DEFAULT_T
     if not cats:
         await query.edit_message_text(
             "📭 Нет категорий для удаления.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("🔙 Назад", callback_data="admin_categories_menu")
             ]])
         )
@@ -582,7 +582,7 @@ async def delete_category_callback(update: Update, context: ContextTypes.DEFAULT
     if success:
         await query.edit_message_text(
             "✅ Категория успешно удалена.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("🔙 К категориям", callback_data="admin_categories_menu")
             ]])
         )
@@ -590,7 +590,7 @@ async def delete_category_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(
             "❌ Нельзя удалить категорию, у которой есть подкатегории.\n\n"
             "Сначала удалите все подкатегории.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("🔙 К категориям", callback_data="admin_categories_menu")
             ]])
         )
@@ -728,7 +728,7 @@ async def create_task_target(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if 'task_type' not in context.user_data:
         await update.message.reply_text(
             "❌ Ошибка: не выбран тип задания. Начните создание заново.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("➕ Создать задание", callback_data="admin_create_task")
             ]])
         )
@@ -784,7 +784,7 @@ async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT
     if missing_fields:
         await update.message.reply_text(
             f"❌ Ошибка: отсутствуют данные ({', '.join(missing_fields)}). Начните создание заново.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("➕ Создать задание", callback_data="admin_create_task")
             ]])
         )
@@ -836,6 +836,7 @@ async def create_task_category_callback(update: Update, context: ContextTypes.DE
     await create_task_finish(query, context)
     context.user_data.clear()
     return ConversationHandler.END
+
 async def create_task_finish(update, context):
     """Завершение создания задания"""
     try:
@@ -851,7 +852,7 @@ async def create_task_finish(update, context):
         
         created_by = update.effective_user.id
         
-        logger.info(f"Получены данные: title={title}, desc={desc[:20]}..., task_type={task_type}, target={target}, reward={reward}")
+        logger.info(f"Получены данные: title={title}, desc={desc[:20]}..., task_type={task_type}, target={target}, reward={reward}, category_id={cat_id}")
         
         if not all([title, desc, task_type, target, reward]):
             error_text = "❌ Ошибка: не все обязательные поля заполнены.\n\n"
@@ -875,6 +876,10 @@ async def create_task_finish(update, context):
         )
         
         logger.info(f"Задание {task_id} успешно создано")
+        
+        # Проверяем, что задание действительно доступно
+        available_tasks = await TaskManager.get_available(cat_id)
+        logger.info(f"После создания, доступных заданий в категории {cat_id}: {len(available_tasks)}")
         
         type_names = {
             'channel': '📢 Канал',
@@ -914,6 +919,7 @@ async def create_task_finish(update, context):
             await update.message.reply_text(error_text, parse_mode=ParseMode.HTML)
         else:
             await update.edit_message_text(error_text, parse_mode=ParseMode.HTML)
+
 # ==================== ВЫДАЧА ССЫЛОК ====================
 async def give_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выдача рабочей ссылки админом"""
@@ -987,7 +993,7 @@ async def pending_list_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(
             "📭 Нет заданий, ожидающих ссылку.\n\n"
             "Все ссылки выданы вовремя!",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")
             ]])
         )
@@ -1057,12 +1063,26 @@ async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, category_id: Optional[int]):
     """Показать доступные задания"""
     query = update.callback_query
+    
+    # Логируем запрос
+    logger.info(f"Запрос заданий для категории: {category_id}")
+    
     tasks_list = await TaskManager.get_available(category_id)
     
+    # Логируем результат
+    logger.info(f"Получено заданий из БД: {len(tasks_list)}")
+    
     if not tasks_list:
+        # Проверим, есть ли вообще задания в этой категории
+        async with Database._pool.acquire() as conn:
+            all_tasks = await conn.fetch('SELECT task_id, title, available, active, taken_by FROM tasks WHERE category_id = $1 OR ($1 IS NULL AND category_id IS NULL)', category_id)
+            logger.info(f"Всего заданий в категории {category_id}: {len(all_tasks)}")
+            for t in all_tasks:
+                logger.info(f"Задание в БД: {dict(t)}")
+        
         await query.edit_message_text(
             "📭 В этой категории пока нет доступных заданий.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("🔙 К категориям", callback_data="user_tasks")
             ]])
         )
@@ -1102,7 +1122,7 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not user:
         await query.edit_message_text(
             "❌ Сначала зарегистрируйтесь через /start",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("🏠 Главное меню", callback_data="back_main")
             ]])
         )
@@ -1112,7 +1132,7 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not task or not task['available']:
         await query.edit_message_text(
             "❌ Это задание уже недоступно.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("📋 Другие задания", callback_data="user_tasks")
             ]])
         )
@@ -1122,7 +1142,7 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not success:
         await query.edit_message_text(
             "❌ Не удалось взять задание. Попробуйте позже.",
-            reply_markup=InlineKeyboardMarkup([[
+            reply_markup=InlineKeyboardMarkup([[ 
                 InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"take_{task_id}")
             ]])
         )
@@ -1174,10 +1194,48 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"3️⃣ Используйте свою ссылку для приглашений\n\n"
         f"Обычно ожидание занимает несколько минут.",
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([[
+        reply_markup=InlineKeyboardMarkup([[ 
             InlineKeyboardButton("📋 Мои задания", callback_data="user_my_tasks")
         ]])
     )
+
+# ==================== ДИАГНОСТИЧЕСКАЯ КОМАНДА ====================
+async def check_tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Временная команда для проверки заданий (только для админов)"""
+    if not await AdminManager.is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Только для администраторов!")
+        return
+    
+    async with Database._pool.acquire() as conn:
+        # Все последние задания
+        all_tasks = await conn.fetch('''
+            SELECT task_id, title, available, active, taken_by, category_id, created_date 
+            FROM tasks 
+            ORDER BY created_date DESC 
+            LIMIT 20
+        ''')
+        
+        text = "📋 <b>Все последние задания:</b>\n\n"
+        for task in all_tasks:
+            status = "✅ Доступно" if task['available'] and task['active'] and not task['taken_by'] else "❌ Недоступно"
+            text += f"• <b>{task['title']}</b>\n"
+            text += f"  ID: {task['task_id']}\n"
+            text += f"  Статус: {status}\n"
+            text += f"  available: {task['available']}, active: {task['active']}, taken_by: {task['taken_by']}\n"
+            text += f"  category: {task['category_id']}\n"
+            text += f"  создано: {task['created_date'].strftime('%d.%m.%Y %H:%M')}\n\n"
+        
+        # Доступные задания
+        available = await TaskManager.get_available()
+        text += f"\n<b>Доступных заданий сейчас:</b> {len(available)}\n"
+        
+        # Если есть доступные, покажем их
+        if available:
+            text += "\n<b>Список доступных:</b>\n"
+            for task in available:
+                text += f"  • {task['title']} (ID: {task['task_id']})\n"
+        
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 # ==================== ГЛАВНЫЙ ОБРАБОТЧИК КНОПОК ====================
 async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1185,6 +1243,8 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     data = query.data
+
+    logger.info(f"Нажата кнопка: {data}")
 
     # Пользовательские кнопки
     if data == "back_main":
@@ -1306,7 +1366,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ==================== ОШИБКИ ====================
-# ==================== ОШИБКИ ====================
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Глобальный обработчик ошибок с подробным логированием"""
     logger.error(f"❌ Произошла ошибка: {context.error}")
@@ -1370,6 +1429,9 @@ def main():
     application.add_handler(CommandHandler("add_admin", add_admin_command))
     application.add_handler(CommandHandler("remove_admin", remove_admin_command))
     application.add_handler(CommandHandler("give_link", give_link_command))
+    
+    # ===== ДИАГНОСТИЧЕСКАЯ КОМАНДА =====
+    application.add_handler(CommandHandler("check_tasks", check_tasks_command))
 
     # ===== CONVERSATION: ДОБАВЛЕНИЕ АДМИНА =====
     conv_add_admin = ConversationHandler(
