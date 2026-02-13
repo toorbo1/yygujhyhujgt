@@ -33,7 +33,7 @@ class Database:
 
     @classmethod
     async def _create_tables(cls):
-        """Создание всех необходимых таблиц"""
+        """Создание всех необходимых таблиц с проверкой структуры"""
         async with cls._pool.acquire() as conn:
             # ---- Категории (блоки и подблоки) ----
             await conn.execute('''
@@ -45,6 +45,13 @@ class Database:
                     created_date TIMESTAMP DEFAULT NOW()
                 )
             ''')
+
+            # Добавляем колонку parent_id, если её нет (для совместимости со старыми таблицами)
+            try:
+                await conn.execute('ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE')
+                logger.info("✅ Колонка parent_id проверена/добавлена")
+            except Exception as e:
+                logger.warning(f"Не удалось добавить parent_id: {e}")
 
             # ---- Пользователи ----
             await conn.execute('''
@@ -159,6 +166,8 @@ class Database:
                 yield conn
 
 
+# ==================== МЕНЕДЖЕРЫ ====================
+
 class UserManager:
     @staticmethod
     async def get_or_create(user_id: int, username: str = "", first_name: str = "") -> dict:
@@ -265,7 +274,8 @@ class CategoryManager:
     @staticmethod
     async def get_all() -> List[dict]:
         async with Database._pool.acquire() as conn:
-            rows = await conn.fetch('SELECT * FROM categories ORDER BY parent_id NULLS FIRST, id')
+            # Используем безопасную сортировку, учитывая возможное отсутствие parent_id
+            rows = await conn.fetch('SELECT * FROM categories ORDER BY COALESCE(parent_id, 0), id')
             return [dict(r) for r in rows]
 
     @staticmethod
@@ -307,7 +317,6 @@ class TaskManager:
     ) -> str:
         task_id = hashlib.md5(f"{title}_{datetime.now()}_{secrets.token_hex(4)}".encode()).hexdigest()[:8]
         async with Database._pool.acquire() as conn:
-            # Проверка существования категории
             if category_id:
                 cat_exists = await conn.fetchval('SELECT id FROM categories WHERE id = $1', category_id)
                 if not cat_exists:
@@ -320,7 +329,6 @@ class TaskManager:
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ''', task_id, category_id, title, description, target_type, target, reward, requirements, created_by, True, True)
 
-            # Проверка
             check = await conn.fetchrow('SELECT task_id, available, active, taken_by FROM tasks WHERE task_id = $1', task_id)
             logger.info(f"✅ Задание {task_id} создано: available={check['available']}, active={check['active']}, taken_by={check['taken_by']}")
         return task_id
@@ -515,3 +523,13 @@ class StatsManager:
                 'pending_links': pending_links,
                 'active_tasks': active_tasks
             }
+
+    @staticmethod
+    async def get_daily(days: int = 7) -> List[dict]:
+        async with Database._pool.acquire() as conn:
+            rows = await conn.fetch('''
+                SELECT * FROM stats 
+                WHERE date >= CURRENT_DATE - $1::integer
+                ORDER BY date DESC
+            ''', days)
+            return [dict(r) for r in rows]
