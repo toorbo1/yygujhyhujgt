@@ -313,9 +313,10 @@ class TaskManager:
         async with Database._pool.acquire() as conn:
             await conn.execute('''
                 INSERT INTO tasks 
-                    (task_id, category_id, title, description, target_type, target, reward, requirements, created_by)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ''', task_id, category_id, title, description, target_type, target, reward, requirements, created_by)
+                    (task_id, category_id, title, description, target_type, target, reward, requirements, created_by, available, active)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ''', task_id, category_id, title, description, target_type, target, reward, requirements, created_by, True, True)
+            logger.info(f"✅ Задание {task_id} создано в БД с available=TRUE")
         return task_id
 
     @staticmethod
@@ -331,7 +332,9 @@ class TaskManager:
                 args.append(category_id)
             query += " ORDER BY created_date DESC"
             rows = await conn.fetch(query, *args)
-            return [dict(r) for r in rows]
+            result = [dict(r) for r in rows]
+            logger.info(f"Найдено доступных заданий: {len(result)}")
+            return result
 
     @staticmethod
     async def get_by_id(task_id: str) -> Optional[dict]:
