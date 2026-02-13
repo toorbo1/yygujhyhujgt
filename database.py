@@ -33,7 +33,7 @@ class Database:
 
     @classmethod
     async def _create_tables(cls):
-        """Создание всех необходимых таблиц с проверкой структуры"""
+        """Создание всех необходимых таблиц с проверкой и добавлением недостающих колонок"""
         async with cls._pool.acquire() as conn:
             # ---- Категории (блоки и подблоки) ----
             await conn.execute('''
@@ -45,13 +45,12 @@ class Database:
                     created_date TIMESTAMP DEFAULT NOW()
                 )
             ''')
-
-            # Добавляем колонку parent_id, если её нет (для совместимости со старыми таблицами)
+            # Добавляем parent_id, если его нет (для старых таблиц)
             try:
                 await conn.execute('ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE')
-                logger.info("✅ Колонка parent_id проверена/добавлена")
+                logger.info("✅ Колонка parent_id в categories проверена/добавлена")
             except Exception as e:
-                logger.warning(f"Не удалось добавить parent_id: {e}")
+                logger.warning(f"Не удалось добавить parent_id в categories: {e}")
 
             # ---- Пользователи ----
             await conn.execute('''
@@ -92,6 +91,24 @@ class Database:
                     proof TEXT
                 )
             ''')
+
+            # Добавляем недостающие колонки в tasks (для совместимости со старыми базами)
+            try:
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS target_type TEXT')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS target TEXT')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS requirements TEXT')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS work_link TEXT')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS proof TEXT')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS available BOOLEAN DEFAULT TRUE')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS taken_by BIGINT REFERENCES users(user_id) ON DELETE SET NULL')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_date TIMESTAMP')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed BOOLEAN DEFAULT FALSE')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_date TIMESTAMP')
+                logger.info("✅ Недостающие колонки в tasks проверены/добавлены")
+            except Exception as e:
+                logger.warning(f"Не удалось добавить колонки в tasks: {e}")
 
             # ---- Задания, взятые пользователями ----
             await conn.execute('''
@@ -274,7 +291,6 @@ class CategoryManager:
     @staticmethod
     async def get_all() -> List[dict]:
         async with Database._pool.acquire() as conn:
-            # Используем безопасную сортировку, учитывая возможное отсутствие parent_id
             rows = await conn.fetch('SELECT * FROM categories ORDER BY COALESCE(parent_id, 0), id')
             return [dict(r) for r in rows]
 
