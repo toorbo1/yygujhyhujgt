@@ -836,10 +836,11 @@ async def create_task_category_callback(update: Update, context: ContextTypes.DE
     await create_task_finish(query, context)
     context.user_data.clear()
     return ConversationHandler.END
-
 async def create_task_finish(update, context):
     """Завершение создания задания"""
     try:
+        logger.info(f"Начало create_task_finish с user_data: {context.user_data}")
+        
         title = context.user_data.get('task_title', '')
         desc = context.user_data.get('task_desc', '')
         task_type = context.user_data.get('task_type', '')
@@ -850,6 +851,8 @@ async def create_task_finish(update, context):
         
         created_by = update.effective_user.id
         
+        logger.info(f"Получены данные: title={title}, desc={desc[:20]}..., task_type={task_type}, target={target}, reward={reward}")
+        
         if not all([title, desc, task_type, target, reward]):
             error_text = "❌ Ошибка: не все обязательные поля заполнены.\n\n"
             if not title: error_text += "• Отсутствует название\n"
@@ -857,6 +860,8 @@ async def create_task_finish(update, context):
             if not task_type: error_text += "• Не выбран тип задания\n"
             if not target: error_text += "• Не указана цель\n"
             if not reward: error_text += "• Не указана награда\n"
+            
+            logger.error(f"Отсутствуют поля: {[f for f in ['title','desc','task_type','target','reward'] if not context.user_data.get(f)]}")
             
             if isinstance(update, Update):
                 await update.message.reply_text(error_text)
@@ -868,6 +873,8 @@ async def create_task_finish(update, context):
             title, desc, task_type, target, reward,
             created_by, cat_id, req
         )
+        
+        logger.info(f"Задание {task_id} успешно создано")
         
         type_names = {
             'channel': '📢 Канал',
@@ -892,10 +899,12 @@ async def create_task_finish(update, context):
         else:
             await update.edit_message_text(text, parse_mode=ParseMode.HTML)
             
-        logger.info(f"✅ Задание {task_id} успешно создано администратором {created_by}")
-        
     except Exception as e:
         logger.error(f"❌ Ошибка при создании задания: {e}")
+        logger.error(f"Тип ошибки: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        
         error_text = (
             "❌ <b>Ошибка при создании задания</b>\n\n"
             f"Текст ошибки: {str(e)[:100]}\n\n"
@@ -905,7 +914,6 @@ async def create_task_finish(update, context):
             await update.message.reply_text(error_text, parse_mode=ParseMode.HTML)
         else:
             await update.edit_message_text(error_text, parse_mode=ParseMode.HTML)
-
 # ==================== ВЫДАЧА ССЫЛОК ====================
 async def give_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выдача рабочей ссылки админом"""
@@ -1298,9 +1306,30 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ==================== ОШИБКИ ====================
+# ==================== ОШИБКИ ====================
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Глобальный обработчик ошибок"""
-    logger.error(f"Ошибка: {context.error}")
+    """Глобальный обработчик ошибок с подробным логированием"""
+    logger.error(f"❌ Произошла ошибка: {context.error}")
+    logger.error(f"Тип ошибки: {type(context.error)}")
+    
+    # Подробное логирование для отладки
+    import traceback
+    tb = traceback.format_exception(None, context.error, context.error.__traceback__)
+    logger.error(f"Traceback: {''.join(tb)}")
+    
+    # Логируем данные пользователя
+    if update:
+        if update.effective_user:
+            logger.error(f"Пользователь: {update.effective_user.id} (@{update.effective_user.username})")
+        if update.callback_query:
+            logger.error(f"Callback data: {update.callback_query.data}")
+        if update.message:
+            logger.error(f"Message text: {update.message.text}")
+    
+    # Логируем user_data
+    if context.user_data:
+        logger.error(f"user_data: {context.user_data}")
+    
     try:
         if update and update.effective_message:
             await update.effective_message.reply_text(
