@@ -311,12 +311,23 @@ class TaskManager:
     ) -> str:
         task_id = hashlib.md5(f"{title}_{datetime.now()}_{secrets.token_hex(4)}".encode()).hexdigest()[:8]
         async with Database._pool.acquire() as conn:
+            # Проверяем, существует ли категория
+            if category_id:
+                cat_exists = await conn.fetchval('SELECT id FROM categories WHERE id = $1', category_id)
+                if not cat_exists:
+                    logger.warning(f"Категория {category_id} не существует, устанавливаем NULL")
+                    category_id = None
+            
             await conn.execute('''
                 INSERT INTO tasks 
                     (task_id, category_id, title, description, target_type, target, reward, requirements, created_by, available, active)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ''', task_id, category_id, title, description, target_type, target, reward, requirements, created_by, True, True)
-            logger.info(f"✅ Задание {task_id} создано в БД с available=TRUE")
+            
+            # Проверяем, что задание создалось правильно
+            check = await conn.fetchrow('SELECT task_id, title, available, active, taken_by, category_id FROM tasks WHERE task_id = $1', task_id)
+            logger.info(f"✅ Задание {task_id} создано в БД: available={check['available']}, active={check['active']}, taken_by={check['taken_by']}, category_id={check['category_id']}")
+            
         return task_id
 
     @staticmethod
@@ -331,9 +342,17 @@ class TaskManager:
                 query += " AND category_id = $1"
                 args.append(category_id)
             query += " ORDER BY created_date DESC"
+            
+            logger.info(f"SQL запрос для доступных заданий: {query}")
+            logger.info(f"Параметры: {args}")
+            
             rows = await conn.fetch(query, *args)
             result = [dict(r) for r in rows]
+            
             logger.info(f"Найдено доступных заданий: {len(result)}")
+            for task in result:
+                logger.info(f"✅ Доступное задание: {task['task_id']} - {task['title']} (available={task['available']}, active={task['active']}, taken_by={task['taken_by']})")
+            
             return result
 
     @staticmethod
@@ -347,6 +366,7 @@ class TaskManager:
         async with Database.transaction() as conn:
             task = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1 FOR UPDATE', task_id)
             if not task or task['taken_by'] or not task['available']:
+                logger.warning(f"Не удалось назначить задание {task_id}: taken_by={task['taken_by'] if task else 'None'}, available={task['available'] if task else 'None'}")
                 return False
             await conn.execute(
                 'UPDATE tasks SET taken_by = $2, available = FALSE, assigned_date = NOW() WHERE task_id = $1',
@@ -356,12 +376,14 @@ class TaskManager:
                 'INSERT INTO user_tasks (user_id, task_id) VALUES ($1, $2)',
                 user_id, task_id
             )
+            logger.info(f"✅ Задание {task_id} назначено пользователю {user_id}")
             return True
 
     @staticmethod
     async def set_work_link(task_id: str, link: str) -> bool:
         async with Database._pool.acquire() as conn:
             await conn.execute('UPDATE tasks SET work_link = $1 WHERE task_id = $2', link, task_id)
+            logger.info(f"✅ Рабочая ссылка установлена для задания {task_id}")
             return True
 
     @staticmethod
@@ -392,6 +414,7 @@ class TaskManager:
                     tasks_completed = stats.tasks_completed + 1,
                     total_payout = stats.total_payout + $1
             ''', task['reward'])
+            logger.info(f"✅ Задание {task_id} выполнено пользователем {user_id}")
             return True
 
     @staticmethod
@@ -468,6 +491,7 @@ class PendingManager:
                     tracking_link = EXCLUDED.tracking_link,
                     processed = FALSE
             ''', task_id, user_id, username, task_title, tracking_link)
+            logger.info(f"✅ Сохранено в pending_links: task_id={task_id}, user_id={user_id}")
 
     @staticmethod
     async def get(task_id: str) -> Optional[dict]:
