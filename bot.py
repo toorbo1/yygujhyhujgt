@@ -103,7 +103,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2. Нажми «Взять» — бот создаст твою личную ссылку\n"
         "3. Администратор выдаст рабочую ссылку\n"
         "4. Приводи людей по своей ссылке и зарабатывай\n\n"
-        "По всем вопросам: @support"
+        "Если есть проблема или баг то по всем вопросам: @V2SHOP123"
     )
     if update.message:
         await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
