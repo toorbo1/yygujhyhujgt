@@ -1039,7 +1039,12 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("⛔ У вас нет прав администратора.")
         return
 
-    request_id = int(query.data.split('_')[1])
+    try:
+        request_id = int(query.data.split('_')[1])
+    except (IndexError, ValueError):
+        await query.edit_message_text("❌ Неверный формат запроса.")
+        return
+
     req = await CompletionManager.get_request(request_id)
     if not req or req['status'] != 'pending':
         await query.edit_message_text("❌ Запрос уже обработан.")
@@ -1053,7 +1058,8 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
                 req['user_id'],
                 f"✅ <b>Задание подтверждено!</b>\n\n"
                 f"Ваше задание «{req['task_title']}» проверено и подтверждено.\n"
-                f"Награда {req['reward']} ₽ зачислена на ваш счёт."
+                f"Награда {req['reward']} ₽ зачислена на ваш счёт.",
+                parse_mode=ParseMode.HTML
             )
         except Exception as e:
             logger.error(f"Не удалось уведомить пользователя {req['user_id']}: {e}")
@@ -1074,7 +1080,12 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("⛔ У вас нет прав администратора.")
         return
 
-    request_id = int(query.data.split('_')[1])
+    try:
+        request_id = int(query.data.split('_')[1])
+    except (IndexError, ValueError):
+        await query.edit_message_text("❌ Неверный формат запроса.")
+        return
+
     req = await CompletionManager.get_request(request_id)
     if not req or req['status'] != 'pending':
         await query.edit_message_text("❌ Запрос уже обработан.")
@@ -1088,7 +1099,8 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
                 req['user_id'],
                 f"❌ <b>Задание отклонено</b>\n\n"
                 f"К сожалению, ваше выполнение задания «{req['task_title']}» не было подтверждено.\n"
-                f"Свяжитесь с администратором для уточнения причин."
+                f"Свяжитесь с администратором для уточнения причин.",
+                parse_mode=ParseMode.HTML
             )
         except Exception as e:
             logger.error(f"Не удалось уведомить пользователя {req['user_id']}: {e}")
@@ -1098,7 +1110,6 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
         )
     else:
         await query.edit_message_text("❌ Не удалось отклонить запрос.")
-
 async def pending_completions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать список ожидающих подтверждения (для админов)"""
     if not await AdminManager.is_admin(update.effective_user.id):
@@ -1737,15 +1748,18 @@ def main():
     application.add_handler(conv_create_task)
 
     # ========== ВАЖНО: СПЕЦИФИЧНЫЕ ОБРАБОТЧИКИ CALLBACK ==========
-    # Эти обработчики должны быть зарегистрированы ДО main_button_handler
-    # и иметь более конкретные паттерны
+    # Эти обработчики должны быть зарегистрированы с максимально конкретными паттернами
+    # и в правильном порядке
     
-    # Обработчик кнопки "Я выполнил задание" для пользователей
-    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_"))
+    # 1. Сначала обработчики для подтверждения/отклонения (самые конкретные)
+    application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_\\d+$"))
+    application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_\\d+$"))
     
-    # Обработчики для админских кнопок подтверждения/отклонения
-    application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_"))
-    application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_"))
+    # 2. Затем обработчик для кнопки "Я выполнил задание"
+    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
+    
+    # 3. Затем все остальные специфичные паттерны из main_button_handler
+    #   但它们 уже обрабатываются в main_button_handler
 
     # ========== ГЛАВНЫЙ ОБРАБОТЧИК КНОПОК ==========
     # Этот обработчик должен быть ПОСЛЕДНИМ, так как он обрабатывает все остальные паттерны
