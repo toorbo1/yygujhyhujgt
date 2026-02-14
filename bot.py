@@ -1174,17 +1174,31 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("❌ Запрос уже обработан.")
         return
 
-    async with Database._pool.acquire() as conn:
-        await conn.execute('UPDATE completion_requests SET status = $1, admin_id = $2, processed_date = NOW() WHERE id = $3',
-                           'approved', admin_id, request_id)
+    # Получаем информацию о задании
+    task = await TaskManager.get_by_id(req['task_id'])
+    if not task:
+        await query.edit_message_text("❌ Задание не найдено.")
+        return
 
+    async with Database.transaction() as conn:
+        # Обновляем статус запроса
+        await conn.execute(
+            'UPDATE completion_requests SET status = $1, admin_id = $2, processed_date = NOW() WHERE id = $3',
+            'approved', admin_id, request_id
+        )
+        
+        # Обновляем статус в user_tasks на "ожидает оплаты" или оставляем как есть
+        # Но пока не завершаем задание полностью
+
+    # Добавляем запись в payment_awaiting
     await PaymentAwaitingManager.add(req['user_id'], req['task_id'], request_id)
 
+    # Отправляем пользователю сообщение с запросом данных карты
     try:
         await context.bot.send_message(
             req['user_id'],
             "✅ <b>Ваше задание было одобрено!</b>\n\n"
-            "Теперь, пожалуйста, отправьте данные вашей карты для получения выплаты.\n"
+            "Пришлите данные вашей карты для пополнения.\n"
             "Вы можете прислать текст или фото карты.\n\n"
             "<i>После отправки данных задание будет завершено, и награда поступит на ваш счёт.</i>",
             parse_mode=ParseMode.HTML
@@ -1194,6 +1208,7 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         logger.error(f"Не удалось отправить запрос данных карты пользователю {req['user_id']}: {e}")
 
     await query.edit_message_text(f"✅ Запрос #{request_id} одобрен. Пользователю отправлен запрос на предоставление данных карты.")
+
 
 async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1216,26 +1231,33 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("❌ Запрос уже обработан.")
         return
 
+    # Получаем информацию о задании
+    task = await TaskManager.get_by_id(req['task_id'])
+
     success = await CompletionManager.reject_request(request_id, admin_id)
     if success:
+        # Создаем клавиатуру с кнопкой "Задать вопрос"
         keyboard = [[InlineKeyboardButton("📝 Задать вопрос", callback_data="ask_question")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        task_title = task['title'] if task else "задания"
+        
         try:
             await context.bot.send_message(
                 req['user_id'],
-                f"❌ <b>Задание отклонено</b>\n\n"
-                f"К сожалению, ваше выполнение задания «{req['task_title']}» не было подтверждено.\n"
+                f"❌ <b>Заявка на выполнение задания была отклонена</b>\n\n"
+                f"К сожалению, ваше выполнение задания «{task_title}» не прошло проверку.\n"
                 f"Напишите, чтобы узнать подробности!",
                 parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup
             )
+            logger.info(f"✅ Уведомление об отклонении отправлено пользователю {req['user_id']}")
         except Exception as e:
             logger.error(f"Не удалось уведомить пользователя {req['user_id']}: {e}")
 
         await query.edit_message_text(f"❌ Запрос #{request_id} отклонён. Пользователь уведомлён.")
     else:
         await query.edit_message_text("❌ Не удалось отклонить запрос.")
-
 async def pending_completions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Только для администраторов.")
@@ -1935,6 +1957,7 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # ЗАВЕРШАЕМ ЗАДАНИЕ ПОСЛЕ ПОЛУЧЕНИЯ ДАННЫХ КАРТЫ
     logger.info(f"Попытка завершения задания {task_id} для пользователя {user_id}")
     success = await TaskManager.complete(task_id, user_id, proof="payment_data_sent")
     
@@ -1946,6 +1969,7 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # Отмечаем запись в payment_awaiting как выполненную
     await PaymentAwaitingManager.mark_completed(awaiting['id'])
     logger.info(f"✅ Задание {task_id} успешно завершено для пользователя {user_id}")
 
@@ -1953,7 +1977,6 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         "✅ Спасибо! Ваши данные получены. Задание успешно завершено, награда зачислена.\n"
         "Вы можете проверить свой профиль командой /profile."
     )
-
 # ==================== КОМАНДЫ ====================
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_main_admin(update.effective_user.id):
