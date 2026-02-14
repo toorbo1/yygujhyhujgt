@@ -197,12 +197,7 @@ async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    
-    # Получаем ТОЛЬКО активные задания (статус 'active')
     tasks_list = await TaskManager.get_user_tasks(user_id, status='active')
-    
-    logger.info(f"Пользователь {user_id} запросил мои задания. Найдено активных: {len(tasks_list)}")
-    
     if not tasks_list:
         await context.bot.send_message(chat_id, "📭 У вас пока нет взятых заданий.")
         return
@@ -220,12 +215,12 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"Заработано: {task['earned']} ₽\n"
         
         keyboard = []
-        # Показываем кнопку только если задание не выполнено
-        if not task.get('completed', False) and task.get('status') == 'active':
+        if not task.get('completed', False):
             keyboard.append([InlineKeyboardButton("✅ Я выполнил задание", callback_data=f"complete_{task['task_id']}")])
         
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
         await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
 # ==================== ОБРАБОТЧИК ВОПРОСОВ ====================
 async def ask_question_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало диалога вопроса"""
@@ -1965,71 +1960,19 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # ЗАВЕРШАЕМ ЗАДАНИЕ ПОСЛЕ ПОЛУЧЕНИЯ ДАННЫХ КАРТЫ
     logger.info(f"Попытка завершения задания {task_id} для пользователя {user_id}")
+    success = await TaskManager.complete(task_id, user_id, proof="payment_data_sent")
     
-    # Проверяем текущее состояние задания и user_tasks
-    async with Database._pool.acquire() as conn:
-        task_before = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1', task_id)
-        user_task_before = await conn.fetchrow('SELECT * FROM user_tasks WHERE user_id = $1 AND task_id = $2', user_id, task_id)
-        logger.info(f"До завершения - tasks: completed={task_before['completed']}, taken_by={task_before['taken_by']}")
-        logger.info(f"До завершения - user_tasks: status={user_task_before['status'] if user_task_before else 'None'}")
-    
-    # Прямое обновление через SQL, если TaskManager.complete не сработал
-    try:
-        async with Database.transaction() as conn:
-            # Обновляем tasks
-            await conn.execute(
-                'UPDATE tasks SET completed = TRUE, completed_date = NOW(), proof = $2, active = FALSE WHERE task_id = $1',
-                task_id, "payment_data_sent"
-            )
-            
-            # Обновляем user_tasks
-            await conn.execute(
-                'UPDATE user_tasks SET status = $2, completed_date = NOW(), earned = $3 WHERE user_id = $4 AND task_id = $1',
-                task_id, 'completed', task['reward'], user_id
-            )
-            
-            # Обновляем пользователя
-            await conn.execute(
-                'UPDATE users SET total_earned = total_earned + $2, completed_tasks = completed_tasks + 1 WHERE user_id = $1',
-                user_id, task['reward']
-            )
-            
-            # Обновляем статистику
-            await conn.execute('''
-                INSERT INTO stats (date, tasks_completed, total_payout) 
-                VALUES (CURRENT_DATE, 1, $1)
-                ON CONFLICT (date) DO UPDATE SET 
-                    tasks_completed = stats.tasks_completed + 1,
-                    total_payout = stats.total_payout + $1
-            ''', task['reward'])
-            
-            logger.info(f"✅ Прямое обновление через SQL выполнено успешно")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при прямом обновлении: {e}")
-        # Пробуем через стандартный метод
-        success = await TaskManager.complete(task_id, user_id, proof="payment_data_sent")
-        if not success:
-            logger.error(f"❌ И стандартный метод не сработал")
-            await update.message.reply_text(
-                "⚠️ Данные отправлены, но произошла ошибка при завершении задания. "
-                "Администратор проверит и завершит задание вручную."
-            )
-            return
-
-    # Проверяем результат
-    async with Database._pool.acquire() as conn:
-        task_after = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1', task_id)
-        user_task_after = await conn.fetchrow('SELECT * FROM user_tasks WHERE user_id = $1 AND task_id = $2', user_id, task_id)
-        logger.info(f"После завершения - tasks: completed={task_after['completed']}, taken_by={task_after['taken_by']}")
-        logger.info(f"После завершения - user_tasks: status={user_task_after['status'] if user_task_after else 'None'}, earned={user_task_after['earned'] if user_task_after else 'None'}")
+    if not success:
+        logger.error(f"❌ Не удалось завершить задание {task_id} для пользователя {user_id}")
+        await update.message.reply_text(
+            "⚠️ Данные отправлены, но произошла ошибка при завершении задания. "
+            "Администратор проверит и завершит задание вручную."
+        )
+        return
 
     # Отмечаем запись в payment_awaiting как выполненную
     await PaymentAwaitingManager.mark_completed(awaiting['id'])
     logger.info(f"✅ Задание {task_id} успешно завершено для пользователя {user_id}")
-
-    # Проверяем, обновилась ли статистика пользователя
-    user_after = await UserManager.get(user_id)
-    logger.info(f"Пользователь после завершения: total_earned={user_after.get('total_earned')}, completed_tasks={user_after.get('completed_tasks')}")
 
     await update.message.reply_text(
         "✅ Спасибо! Ваши данные получены. Задание успешно завершено, награда зачислена.\n"
