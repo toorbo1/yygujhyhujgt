@@ -1,4 +1,4 @@
-# database.py
+# database.py (полная версия с поддержкой частичного взятия заданий)
 import os
 import logging
 from typing import Dict, List, Optional, Any
@@ -91,7 +91,7 @@ class Database:
                     status TEXT DEFAULT 'waiting'
                 )
             ''')
-            # ---- Задания ----
+            # ---- Задания (добавлены новые колонки для многочастности) ----
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS tasks (
                     task_id TEXT PRIMARY KEY,
@@ -111,7 +111,12 @@ class Database:
                     work_link TEXT,
                     completed BOOLEAN DEFAULT FALSE,
                     completed_date TIMESTAMP,
-                    proof TEXT
+                    proof TEXT,
+                    -- новые поля для многочастных заданий
+                    total_quantity INTEGER DEFAULT 1,
+                    remaining_quantity INTEGER DEFAULT 1,
+                    price_per_unit DECIMAL(10,2),
+                    available_quantities TEXT  -- JSON список доступных объёмов
                 )
             ''')
 
@@ -129,11 +134,15 @@ class Database:
                 await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_date TIMESTAMP')
                 await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed BOOLEAN DEFAULT FALSE')
                 await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_date TIMESTAMP')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS total_quantity INTEGER DEFAULT 1')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS remaining_quantity INTEGER DEFAULT 1')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS price_per_unit DECIMAL(10,2)')
+                await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS available_quantities TEXT')
                 logger.info("✅ Недостающие колонки в tasks проверены/добавлены")
             except Exception as e:
                 logger.warning(f"Не удалось добавить колонки в tasks: {e}")
 
-            # ---- Задания, взятые пользователями ----
+            # ---- Задания, взятые пользователями (добавлено taken_quantity) ----
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS user_tasks (
                     id SERIAL PRIMARY KEY,
@@ -143,9 +152,15 @@ class Database:
                     taken_date TIMESTAMP DEFAULT NOW(),
                     completed_date TIMESTAMP,
                     earned DECIMAL(10,2),
+                    taken_quantity INTEGER DEFAULT 1,  -- сколько единиц взято
                     UNIQUE(user_id, task_id)
                 )
             ''')
+            # Добавляем taken_quantity, если нет
+            try:
+                await conn.execute('ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS taken_quantity INTEGER DEFAULT 1')
+            except Exception as e:
+                logger.warning(f"Не удалось добавить taken_quantity в user_tasks: {e}")
 
             # ---- Отслеживающие ссылки ----
             await conn.execute('''
@@ -373,7 +388,10 @@ class TaskManager:
         reward: float,
         created_by: int,
         category_id: Optional[int] = None,
-        requirements: str = ""
+        requirements: str = "",
+        total_quantity: int = 1,
+        price_per_unit: Optional[float] = None,
+        available_quantities: Optional[List[int]] = None
     ) -> str:
         task_id = hashlib.md5(f"{title}_{datetime.now()}_{secrets.token_hex(4)}".encode()).hexdigest()[:8]
         async with Database._pool.acquire() as conn:
@@ -383,11 +401,21 @@ class TaskManager:
                     logger.warning(f"Категория {category_id} не существует, устанавливаем NULL")
                     category_id = None
 
+            # Если available_quantities не задан, задание простое
+            if available_quantities is None:
+                available_quantities_json = None
+                price_per_unit = reward  # для простого задания цена за единицу = награда
+                total_quantity = 1
+            else:
+                available_quantities_json = json.dumps(available_quantities)
+
             await conn.execute('''
                 INSERT INTO tasks 
-                    (task_id, category_id, title, description, target_type, target, reward, requirements, created_by, available, active)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            ''', task_id, category_id, title, description, target_type, target, reward, requirements, created_by, True, True)
+                    (task_id, category_id, title, description, target_type, target, reward, requirements, created_by,
+                     total_quantity, remaining_quantity, price_per_unit, available_quantities, available, active)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            ''', task_id, category_id, title, description, target_type, target, reward, requirements, created_by,
+                total_quantity, total_quantity, price_per_unit, available_quantities_json, True, True)
 
             check = await conn.fetchrow('SELECT task_id, available, active, taken_by FROM tasks WHERE task_id = $1', task_id)
             logger.info(f"✅ Задание {task_id} создано: available={check['available']}, active={check['active']}, taken_by={check['taken_by']}")
@@ -398,7 +426,7 @@ class TaskManager:
         async with Database._pool.acquire() as conn:
             query = '''
                 SELECT * FROM tasks 
-                WHERE available = TRUE AND active = TRUE AND taken_by IS NULL
+                WHERE available = TRUE AND active = TRUE AND taken_by IS NULL AND remaining_quantity > 0
             '''
             args = []
             if category_id is not None:
@@ -409,6 +437,13 @@ class TaskManager:
             logger.info(f"SQL get_available: {query}, args={args}")
             rows = await conn.fetch(query, *args)
             result = [dict(r) for r in rows]
+            # Парсим JSON для available_quantities
+            for r in result:
+                if r['available_quantities']:
+                    try:
+                        r['available_quantities'] = json.loads(r['available_quantities'])
+                    except:
+                        r['available_quantities'] = None
             logger.info(f"Найдено доступных заданий: {len(result)}")
             return result
 
@@ -416,21 +451,59 @@ class TaskManager:
     async def get_by_id(task_id: str) -> Optional[dict]:
         async with Database._pool.acquire() as conn:
             row = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1', task_id)
-            return dict(row) if row else None
+            if row:
+                result = dict(row)
+                if result['available_quantities']:
+                    try:
+                        result['available_quantities'] = json.loads(result['available_quantities'])
+                    except:
+                        result['available_quantities'] = None
+                return result
+            return None
 
     @staticmethod
     async def assign(task_id: str, user_id: int) -> bool:
+        """Используется для простых заданий (total_quantity = 1)"""
         async with Database.transaction() as conn:
             task = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1 FOR UPDATE', task_id)
-            if not task or task['taken_by'] or not task['available']:
+            if not task or task['taken_by'] or not task['available'] or task['remaining_quantity'] <= 0:
                 return False
+            # Для простого задания уменьшаем remaining_quantity до 0
             await conn.execute(
-                'UPDATE tasks SET taken_by = $2, available = FALSE, assigned_date = NOW() WHERE task_id = $1',
+                'UPDATE tasks SET taken_by = $2, available = FALSE, assigned_date = NOW(), remaining_quantity = 0 WHERE task_id = $1',
                 task_id, user_id
             )
             await conn.execute(
-                'INSERT INTO user_tasks (user_id, task_id) VALUES ($1, $2)',
+                'INSERT INTO user_tasks (user_id, task_id, taken_quantity) VALUES ($1, $2, 1)',
                 user_id, task_id
+            )
+            return True
+
+    @staticmethod
+    async def take_partial(task_id: str, user_id: int, quantity: int) -> bool:
+        """Резервирует часть многочастного задания"""
+        async with Database.transaction() as conn:
+            task = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1 FOR UPDATE', task_id)
+            if not task or task['remaining_quantity'] < quantity:
+                return False
+
+            new_remaining = task['remaining_quantity'] - quantity
+            if new_remaining == 0:
+                # Если задание полностью выбрано, помечаем как недоступное
+                await conn.execute(
+                    'UPDATE tasks SET remaining_quantity = 0, available = FALSE, taken_by = $2 WHERE task_id = $1',
+                    task_id, user_id
+                )
+            else:
+                # Иначе просто уменьшаем остаток, задание остаётся доступным
+                await conn.execute(
+                    'UPDATE tasks SET remaining_quantity = $2 WHERE task_id = $1',
+                    task_id, new_remaining
+                )
+
+            await conn.execute(
+                'INSERT INTO user_tasks (user_id, task_id, taken_quantity) VALUES ($1, $2, $3)',
+                user_id, task_id, quantity
             )
             return True
 
@@ -449,17 +522,22 @@ class TaskManager:
             )
             if not task:
                 return False
+            # Вычисляем заработанную сумму на основе взятого количества
+            ut = await conn.fetchrow('SELECT taken_quantity FROM user_tasks WHERE user_id = $1 AND task_id = $2', user_id, task_id)
+            taken_q = ut['taken_quantity'] if ut else 1
+            earned = taken_q * task['price_per_unit']
+
             await conn.execute(
                 'UPDATE tasks SET completed = TRUE, completed_date = NOW(), proof = $2, active = FALSE WHERE task_id = $1',
                 task_id, proof
             )
             await conn.execute(
                 'UPDATE user_tasks SET status = $2, completed_date = NOW(), earned = $3 WHERE user_id = $4 AND task_id = $1',
-                task_id, 'completed', task['reward'], user_id
+                task_id, 'completed', earned, user_id
             )
             await conn.execute(
                 'UPDATE users SET total_earned = total_earned + $2, completed_tasks = completed_tasks + 1 WHERE user_id = $1',
-                user_id, task['reward']
+                user_id, earned
             )
             await conn.execute('''
                 INSERT INTO stats (date, tasks_completed, total_payout) 
@@ -467,14 +545,14 @@ class TaskManager:
                 ON CONFLICT (date) DO UPDATE SET 
                     tasks_completed = stats.tasks_completed + 1,
                     total_payout = stats.total_payout + $1
-            ''', task['reward'])
+            ''', earned)
             return True
 
     @staticmethod
     async def get_user_tasks(user_id: int, status: Optional[str] = None) -> List[dict]:
         async with Database._pool.acquire() as conn:
             query = '''
-                SELECT t.*, ut.status, ut.taken_date, ut.earned 
+                SELECT t.*, ut.status, ut.taken_date, ut.earned, ut.taken_quantity
                 FROM tasks t
                 JOIN user_tasks ut ON t.task_id = ut.task_id
                 WHERE ut.user_id = $1
@@ -714,12 +792,18 @@ class CompletionManager:
                     WHERE id = $1
                 ''', request_id, admin_id)
 
-                # Возвращаем задание обратно в доступные
+                # Возвращаем задание обратно в доступные (увеличиваем remaining_quantity)
+                # Сначала получаем количество, которое взял пользователь
+                ut = await conn.fetchrow('SELECT taken_quantity FROM user_tasks WHERE user_id = $1 AND task_id = $2', req['user_id'], req['task_id'])
+                taken_q = ut['taken_quantity'] if ut else 1
+
                 await conn.execute('''
                     UPDATE tasks 
-                    SET taken_by = NULL, available = TRUE, active = TRUE
-                    WHERE task_id = $1
-                ''', req['task_id'])
+                    SET taken_by = NULL, 
+                        available = CASE WHEN remaining_quantity + $1 > 0 THEN TRUE ELSE available END,
+                        remaining_quantity = remaining_quantity + $1
+                    WHERE task_id = $2
+                ''', taken_q, req['task_id'])
 
                 await conn.execute('''
                     DELETE FROM user_tasks 

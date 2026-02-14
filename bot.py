@@ -1,8 +1,9 @@
-# bot.py
+# bot.py (полная версия с поддержкой частичного взятия заданий)
 import os
 import logging
 import asyncio
 import urllib.parse
+import json  # добавлен импорт
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
@@ -47,7 +48,8 @@ ADD_ADMIN_ID, ADD_ADMIN_USERNAME = range(14, 16)
 BROADCAST_TEXT = 50
 ASK_QUESTION = 51
 REMOVE_TASK_USER_ID, REMOVE_TASK_TASK_ID = range(52, 54)
-DELETE_TASK_ID = 55  # новое состояние для удаления задания
+DELETE_TASK_ID = 55
+TASK_MULTI_DATA = 100  # новое состояние
 
 # ==================== ОБЩИЕ КОМАНДЫ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -208,10 +210,12 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for task in tasks_list:
         status_emoji = "✅" if task.get('completed', False) else "⏳"
         reward = task.get('reward', 0)
+        taken_quantity = task.get('taken_quantity', 1)  # добавлено
         text = (
             f"{status_emoji} <b>{task['title']}</b>\n"
             f"ID: <code>{task['task_id']}</code>\n"
             f"💰 Награда: {reward} ₽\n"
+            f"📊 Взято единиц: {taken_quantity}\n"
             f"Статус: {'Выполнено' if task.get('completed', False) else 'В работе'}\n"
         )
         if task.get('earned'):
@@ -965,6 +969,7 @@ async def create_task_reward(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     return REQUIREMENTS
 
+# Обновлённая функция create_task_requirements
 async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.message.text == '/cancel':
@@ -975,43 +980,17 @@ async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT
         req = update.message.text
         context.user_data['requirements'] = req if req.lower() != 'нет' else ""
 
-        logger.info(f"Требования сохранены: {context.user_data['requirements']}")
-        logger.info(f"user_data после требований: {context.user_data}")
-
-        required_fields = ['task_title', 'task_desc', 'task_type', 'target', 'reward']
-        missing = [f for f in required_fields if f not in context.user_data]
-        if missing:
-            logger.error(f"Отсутствуют поля: {missing}")
-            await update.message.reply_text(
-                f"❌ Ошибка: отсутствуют данные ({', '.join(missing)}). Начните создание заново."
-            )
-            context.user_data.clear()
-            return ConversationHandler.END
-
-        cats = await CategoryManager.get_all()
-        logger.info(f"Получено категорий: {len(cats)}")
-
-        if not cats:
-            context.user_data['category_id'] = None
-            await create_task_finish(update, context)
-            context.user_data.clear()
-            return ConversationHandler.END
-
-        keyboard = []
-        for cat in cats:
-            prefix = "  " * (1 if cat['parent_id'] else 0)
-            button_text = f"{prefix}{cat['name']}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"task_cat_{cat['id']}")])
-
-        keyboard.append([InlineKeyboardButton("⏭ Без категории", callback_data="task_cat_none")])
-        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="task_cat_cancel")])
-
+        # Запрашиваем информацию о многочастности
         await update.message.reply_text(
-            "📁 Выберите <b>категорию</b> задания:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "📦 <b>Многочастное задание?</b>\n\n"
+            "Если задание можно брать частями, введите данные в формате:\n"
+            "<code>общее_количество, цена_за_единицу, список_объёмов</code>\n"
+            "Например: <code>1000, 1.2, 333,500,1000</code>\n\n"
+            "Если задание простое (целиком), отправьте <code>-</code>\n\n"
+            "Или отправьте /cancel для отмены.",
+            parse_mode=ParseMode.HTML
         )
-        return TASK_CATEGORY
+        return TASK_MULTI_DATA
 
     except Exception as e:
         logger.error(f"❌ Ошибка в create_task_requirements: {e}")
@@ -1022,6 +1001,68 @@ async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT
         )
         context.user_data.clear()
         return ConversationHandler.END
+
+# Новый обработчик для ввода данных многочастного задания
+async def create_task_multi_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Создание задания отменено.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    text = update.message.text.strip()
+    if text == '-':
+        # Простое задание
+        context.user_data['total_quantity'] = 1
+        context.user_data['price_per_unit'] = context.user_data.get('reward')
+        context.user_data['available_quantities'] = None
+    else:
+        parts = [x.strip() for x in text.split(',')]
+        if len(parts) < 3:
+            await update.message.reply_text(
+                "❌ Неверный формат. Введите: общее_количество, цена_за_единицу, объём1, объём2, ...\n"
+                "Или отправьте '-' для простого задания."
+            )
+            return TASK_MULTI_DATA
+        try:
+            total_q = int(parts[0])
+            price_per_unit = float(parts[1])
+            quantities = [int(x) for x in parts[2:]]
+            if total_q <= 0 or price_per_unit <= 0 or any(q <= 0 for q in quantities):
+                raise ValueError
+            if any(q > total_q for q in quantities):
+                await update.message.reply_text("❌ Некоторые объёмы превышают общее количество.")
+                return TASK_MULTI_DATA
+            context.user_data['total_quantity'] = total_q
+            context.user_data['price_per_unit'] = price_per_unit
+            context.user_data['available_quantities'] = quantities
+            # Обновляем reward для совместимости (полная стоимость)
+            context.user_data['reward'] = total_q * price_per_unit
+        except:
+            await update.message.reply_text("❌ Ошибка в числах. Попробуйте снова.")
+            return TASK_MULTI_DATA
+
+    # Переходим к выбору категории
+    cats = await CategoryManager.get_all()
+    if not cats:
+        context.user_data['category_id'] = None
+        await create_task_finish(update, context)
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    keyboard = []
+    for cat in cats:
+        prefix = "  " * (1 if cat['parent_id'] else 0)
+        button_text = f"{prefix}{cat['name']}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"task_cat_{cat['id']}")])
+    keyboard.append([InlineKeyboardButton("⏭ Без категории", callback_data="task_cat_none")])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="task_cat_cancel")])
+
+    await update.message.reply_text(
+        "📁 Выберите <b>категорию</b> задания:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return TASK_CATEGORY
 
 async def create_task_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -1069,6 +1110,9 @@ async def create_task_finish(update, context):
         reward = context.user_data.get('reward')
         req = context.user_data.get('requirements', '')
         cat_id = context.user_data.get('category_id')
+        total_quantity = context.user_data.get('total_quantity', 1)
+        price_per_unit = context.user_data.get('price_per_unit', reward)
+        available_quantities = context.user_data.get('available_quantities')
 
         if not all([title, desc, task_type, target, reward]):
             missing = []
@@ -1089,11 +1133,14 @@ async def create_task_finish(update, context):
             created_by = update.effective_user.id
         else:
             created_by = update.from_user.id
-        
+
         task_id = await TaskManager.create(
-                    title, desc, task_type, target, float(reward),
-                    created_by, cat_id, req
-                )
+            title, desc, task_type, target, float(reward),
+            created_by, cat_id, req,
+            total_quantity=total_quantity,
+            price_per_unit=price_per_unit,
+            available_quantities=available_quantities
+        )
 
         logger.info(f"✅ Задание {task_id} создано")
 
@@ -1111,9 +1158,16 @@ async def create_task_finish(update, context):
             f"🔗 <b>Цель:</b> {target}\n"
             f"💰 <b>Награда:</b> {reward} ₽\n"
             f"📌 <b>Требования:</b> {req or 'нет'}\n"
-            f"🆔 <b>ID задания:</b> <code>{task_id}</code>\n\n"
-            f"Задание доступно для пользователей."
+            f"🆔 <b>ID задания:</b> <code>{task_id}</code>\n"
         )
+        if available_quantities:
+            text += f"📊 <b>Многочастное:</b> Да\n"
+            text += f"   • Всего единиц: {total_quantity}\n"
+            text += f"   • Цена за единицу: {price_per_unit} ₽\n"
+            text += f"   • Доступные объёмы: {', '.join(map(str, available_quantities))}\n"
+        else:
+            text += f"📊 <b>Многочастное:</b> Нет\n"
+        text += f"\nЗадание доступно для пользователей."
 
         if isinstance(update, Update):
             await update.message.reply_text(text, parse_mode=ParseMode.HTML)
@@ -1161,7 +1215,8 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
         f"👤 Пользователь: @{user['username'] or 'нет'} (ID: {user_id})\n"
         f"📋 Задание: {task['title']}\n"
         f"🆔 ID задания: <code>{task_id}</code>\n"
-        f"💰 Награда: {task['reward']} ₽\n\n"
+        f"💰 Награда: {task['reward']} ₽\n"
+        f"📊 Взято единиц: {ut['taken_quantity']}\n"  # добавлено
         f"Подтвердите или отклоните выполнение:"
     )
     keyboard = [
@@ -1517,6 +1572,7 @@ async def remove_user_task_user_id(update: Update, context: ContextTypes.DEFAULT
         for i, task in enumerate(tasks, 1):
             text += f"{i}. <b>{task['title']}</b> (ID: <code>{task['task_id']}</code>)\n"
             text += f"   💰 Награда: {task['reward']} ₽\n"
+            text += f"   📊 Взято единиц: {task['taken_quantity']}\n"
             taken_date = task.get('taken_date')
             if taken_date:
                 text += f"   📅 Взято: {taken_date.strftime('%d.%m.%Y')}\n"
@@ -1561,15 +1617,24 @@ async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT
             return REMOVE_TASK_TASK_ID
 
         task_info = await TaskManager.get_by_id(task_id)
+        taken_quantity = task['taken_quantity']
 
     async with Database.transaction() as conn:
+        # Удаляем из user_tasks
         await conn.execute(
             'DELETE FROM user_tasks WHERE user_id = $1 AND task_id = $2',
             user_id, task_id
         )
         
+        # Возвращаем количество обратно в задание
         await conn.execute(
-            'UPDATE tasks SET taken_by = NULL, available = TRUE, active = TRUE WHERE task_id = $1',
+            'UPDATE tasks SET remaining_quantity = remaining_quantity + $1 WHERE task_id = $2',
+            taken_quantity, task_id
+        )
+        
+        # Если задание стало снова доступно, обновляем флаги
+        await conn.execute(
+            'UPDATE tasks SET available = TRUE, taken_by = NULL WHERE task_id = $1 AND remaining_quantity > 0',
             task_id
         )
         
@@ -1583,7 +1648,8 @@ async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT
             user_id,
             f"⚠️ <b>Задание удалено администратором</b>\n\n"
             f"📋 Задание: {task_info['title']}\n"
-            f"🆔 ID: {task_id}\n\n"
+            f"🆔 ID: {task_id}\n"
+            f"📊 Взято единиц: {taken_quantity}\n\n"
             f"Задание было удалено из вашего списка. "
             f"Если у вас есть вопросы, воспользуйтесь командой /help.",
             parse_mode=ParseMode.HTML
@@ -1683,12 +1749,6 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, categor
     logger.info(f"Получено заданий из БД: {len(tasks_list)}")
 
     if not tasks_list:
-        async with Database._pool.acquire() as conn:
-            all_tasks = await conn.fetch('SELECT task_id, title, available, active, taken_by FROM tasks WHERE category_id = $1 OR ($1 IS NULL AND category_id IS NULL)', category_id)
-            logger.info(f"Всего заданий в категории {category_id}: {len(all_tasks)}")
-            for t in all_tasks:
-                logger.info(f"Задание в БД: {dict(t)}")
-
         await query.edit_message_text(
             "📭 В этой категории пока нет доступных заданий.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К категориям", callback_data="user_tasks")]])
@@ -1708,15 +1768,140 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, categor
             f"{task['description']}\n\n"
             f"💰 <b>Награда:</b> {task['reward']} ₽\n"
             f"🎯 <b>Цель:</b> {task['target']}\n"
-            f"📌 <b>Требования:</b> {task['requirements'] or 'нет'}"
+            f"📌 <b>Требования:</b> {task['requirements'] or 'нет'}\n"
         )
-        keyboard = [[InlineKeyboardButton("✅ Взять задание", callback_data=f"take_{task['task_id']}")]]
+        if task.get('available_quantities'):
+            try:
+                quantities = json.loads(task['available_quantities'])
+                # Отображаем доступные варианты
+                text += f"📊 <b>Доступные объёмы:</b>\n"
+                for q in quantities:
+                    if q <= task['remaining_quantity']:
+                        price = q * task['price_per_unit']
+                        text += f"  • {q} ед. — {price} ₽\n"
+            except:
+                pass
+        else:
+            text += f"📊 <b>Объём:</b> 1 ед.\n"
+
+        keyboard = []
+        if task.get('available_quantities'):
+            # Показываем кнопки для каждого доступного объёма
+            try:
+                quantities = json.loads(task['available_quantities'])
+                for q in quantities:
+                    if q <= task['remaining_quantity']:
+                        price = q * task['price_per_unit']
+                        keyboard.append([InlineKeyboardButton(
+                            f"Взять {q} ед. — {price} ₽",
+                            callback_data=f"take_partial_{task['task_id']}_{q}"
+                        )])
+            except:
+                pass
+        else:
+            keyboard.append([InlineKeyboardButton("✅ Взять задание", callback_data=f"take_{task['task_id']}")])
+        
         await query.message.reply_text(
             text,
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
         )
 
+# Новый обработчик для частичного взятия
+async def take_partial_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data_parts = query.data.split('_')
+    # data = "take_partial_TASK_ID_QUANTITY"
+    task_id = data_parts[2]
+    quantity = int(data_parts[3])
+    user_id = update.effective_user.id
+
+    user = await UserManager.get(user_id)
+    if not user:
+        await query.edit_message_text(
+            "❌ Сначала зарегистрируйтесь через /start",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="back_main")]])
+        )
+        return
+
+    task = await TaskManager.get_by_id(task_id)
+    if not task or task['remaining_quantity'] < quantity:
+        await query.edit_message_text(
+            "❌ Это задание уже недоступно в таком объёме.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 Другие задания", callback_data="user_tasks")]])
+        )
+        return
+
+    # Резервируем часть
+    success = await TaskManager.take_partial(task_id, user_id, quantity)
+    if not success:
+        await query.edit_message_text(
+            "❌ Не удалось взять задание. Попробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"take_{task_id}")]])
+        )
+        return
+
+    # Создаём отслеживающую ссылку
+    tracking_link = await TrackingManager.generate_link(user_id, task_id)
+    # Сохраняем в ожидающие (без изменения, так как задание уже частичное)
+    await PendingManager.save(
+        task_id, user_id,
+        user.get('username', ''),
+        task['title'],
+        tracking_link
+    )
+
+    # Уведомление администраторам в группу
+    admin_msg = (
+        f"🆕 <b>ЧАСТЬ ЗАДАНИЯ ВЗЯТА!</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 <b>Пользователь:</b>\n"
+        f"  • ID: <code>{user_id}</code>\n"
+        f"  • Username: @{user.get('username', 'нет')}\n"
+        f"  • Имя: {user.get('first_name', 'не указано')}\n\n"
+        f"📋 <b>Задание:</b>\n"
+        f"  • Название: {task['title']}\n"
+        f"  • ID: <code>{task_id}</code>\n"
+        f"  • Взято единиц: {quantity}\n"
+        f"  • Цена за единицу: {task['price_per_unit']} ₽\n"
+        f"  • Стоимость: {quantity * task['price_per_unit']} ₽\n"
+        f"  • Осталось единиц: {task['remaining_quantity'] - quantity}\n\n"
+        f"🔗 <b>Отслеживающая ссылка:</b>\n"
+        f"{tracking_link}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"⚠️ <b>ТРЕБУЕТСЯ ВЫДАТЬ РАБОЧУЮ ССЫЛКУ!</b>\n\n"
+        f"📌 <b>Команда для выдачи:</b>\n"
+        f"<code>/give_link {task_id} ССЫЛКА_СЮДА</code>"
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=GROUP_ID,
+            text=admin_msg,
+            parse_mode=ParseMode.HTML,
+            message_thread_id=TOPIC_LINKS
+        )
+        logger.info(f"✅ Уведомление отправлено в тему 'ссылки' (ID: {TOPIC_LINKS}) для задания {task_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки в тему 'ссылки': {e}")
+
+    await query.edit_message_text(
+        f"✅ <b>Вы взяли часть задания!</b>\n\n"
+        f"📋 <b>Задание:</b> {task['title']}\n"
+        f"📊 <b>Взято единиц:</b> {quantity}\n"
+        f"💰 <b>Стоимость:</b> {quantity * task['price_per_unit']} ₽\n\n"
+        f"⏳ <b>Что дальше?</b>\n"
+        f"1️⃣ Ожидайте, администратор выдаст рабочую ссылку\n"
+        f"2️⃣ Вы получите уведомление, когда ссылка будет готова\n"
+        f"3️⃣ Используйте свою ссылку для приглашений\n\n"
+        f"Обычно ожидание занимает несколько минут.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 Мои задания", callback_data="user_my_tasks")]])
+    )
+
+# Оригинальный обработчик для простых заданий
 async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1733,13 +1918,24 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     task = await TaskManager.get_by_id(task_id)
-    if not task or not task['available']:
+    if not task or not task['available'] or task['remaining_quantity'] <= 0:
         await query.edit_message_text(
             "❌ Это задание уже недоступно.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 Другие задания", callback_data="user_tasks")]])
         )
         return
 
+    # Проверяем, не многочастное ли задание? Если да, то нужно использовать другой обработчик.
+    if task.get('available_quantities'):
+        # Если задание многочастное, но нажата обычная кнопка "Взять", покажем варианты
+        # На самом деле, мы уже в show_tasks выводим кнопки с выбором, но на всякий случай:
+        await query.edit_message_text(
+            "❌ Это задание можно брать только частями. Выберите объём из списка выше.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 К заданиям", callback_data="user_tasks")]])
+        )
+        return
+
+    # Простое задание
     success = await TaskManager.assign(task_id, user_id)
     if not success:
         await query.edit_message_text(
@@ -1807,7 +2003,8 @@ async def check_tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     async with Database._pool.acquire() as conn:
         all_tasks = await conn.fetch('''
-            SELECT task_id, title, available, active, taken_by, category_id, created_date 
+            SELECT task_id, title, available, active, taken_by, category_id, created_date,
+                   total_quantity, remaining_quantity, price_per_unit, available_quantities
             FROM tasks 
             ORDER BY created_date DESC 
             LIMIT 20
@@ -1815,13 +2012,18 @@ async def check_tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         text = "📋 <b>Все последние задания:</b>\n\n"
         for task in all_tasks:
-            status = "✅ Доступно" if task['available'] and task['active'] and not task['taken_by'] else "❌ Недоступно"
+            status = "✅ Доступно" if task['available'] and task['active'] and task['remaining_quantity'] > 0 else "❌ Недоступно"
             text += f"• <b>{task['title']}</b>\n"
             text += f"  ID: {task['task_id']}\n"
             text += f"  Статус: {status}\n"
             text += f"  available: {task['available']}, active: {task['active']}, taken_by: {task['taken_by']}\n"
             text += f"  category: {task['category_id']}\n"
-            text += f"  создано: {task['created_date'].strftime('%d.%m.%Y %H:%M')}\n\n"
+            text += f"  создано: {task['created_date'].strftime('%d.%m.%Y %H:%M')}\n"
+            text += f"  всего ед.: {task['total_quantity']}, осталось: {task['remaining_quantity']}\n"
+            text += f"  цена за ед.: {task['price_per_unit']}\n"
+            if task['available_quantities']:
+                text += f"  варианты: {task['available_quantities']}\n"
+            text += "\n"
 
         available = await TaskManager.get_available()
         text += f"\n<b>Доступных заданий сейчас:</b> {len(available)}\n"
@@ -1829,7 +2031,7 @@ async def check_tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         if available:
             text += "\n<b>Список доступных:</b>\n"
             for task in available:
-                text += f"  • {task['title']} (ID: {task['task_id']})\n"
+                text += f"  • {task['title']} (ID: {task['task_id']}) — ост. {task['remaining_quantity']} ед.\n"
 
         await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -1935,7 +2137,7 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     data = query.data
     
-    if data.startswith(('approve_', 'reject_', 'complete_', 'answer_user_', 'confirm_delete_')):
+    if data.startswith(('approve_', 'reject_', 'complete_', 'answer_user_', 'confirm_delete_', 'take_partial_')):
         logger.info(f"Пропускаем через main_button_handler: {data}")
         return  # Пусть обрабатывается более конкретными обработчиками
     
@@ -2274,6 +2476,9 @@ def main():
     # Обработчик подтверждения удаления задания
     application.add_handler(CallbackQueryHandler(confirm_delete_callback, pattern="^(confirm_delete_|cancel_delete)$"))
 
+    # Обработчик частичного взятия задания
+    application.add_handler(CallbackQueryHandler(take_partial_callback, pattern="^take_partial_[a-zA-Z0-9]+_\\d+$"))
+
     # ========== 2. ПОТОМ ДИАЛОГИ ==========
     
     # Диалог для вопросов от пользователей
@@ -2365,7 +2570,7 @@ def main():
     )
     application.add_handler(conv_add_category)
 
-    # Диалог создания задания
+    # Диалог создания задания (обновлён)
     conv_create_task = ConversationHandler(
         entry_points=[
             CommandHandler("create_task", create_task_start),
@@ -2378,6 +2583,7 @@ def main():
             TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_target)],
             REWARD: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_reward)],
             REQUIREMENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_requirements)],
+            TASK_MULTI_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_multi_data)],
             TASK_CATEGORY: [CallbackQueryHandler(create_task_category_callback, pattern="^task_cat_")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
