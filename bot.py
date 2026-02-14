@@ -1159,6 +1159,7 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    logger.info(f"✅ approve_request_callback вызван с data: {query.data}")
     await query.answer()
     admin_id = update.effective_user.id
     logger.info(f"Admin {admin_id} нажал 'Подтвердить'")
@@ -1223,6 +1224,7 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
 
 async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    logger.info(f"❌ reject_request_callback вызван с data: {query.data}")
     await query.answer()
     admin_id = update.effective_user.id
     logger.info(f"Admin {admin_id} нажал 'Отклонить'")
@@ -1822,9 +1824,12 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     data = query.data
     
-    # Проверяем, не обработан ли уже этот callback более конкретным обработчиком
-    if data.startswith(('complete_', 'approve_', 'reject_', 'answer_user_')):
-        return
+    if data.startswith(('approve_', 'reject_', 'complete_')):
+        logger.info(f"Пропускаем через main_button_handler: {data}")
+        return  # Пусть обрабатывается более конкретными обработчиками
+    
+    await query.answer()
+    logger.info(f"Главный обработчик: нажата кнопка {data}")
         
     await query.answer()
     logger.info(f"Главный обработчик: нажата кнопка {data}")
@@ -2116,10 +2121,16 @@ def main():
     application = Application.builder().token(TOKEN).post_init(post_init).build()
     application.post_shutdown = shutdown
 
-    # ========== 1. СНАЧАЛА КОНКРЕТНЫЕ ОБРАБОТЧИКИ ==========
-    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
+    # ========== 1. СНАЧАЛА САМЫЕ КОНКРЕТНЫЕ ОБРАБОТЧИКИ ==========
+    # Обработчики для кнопок подтверждения/отклонения (самые приоритетные)
     application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_\\d+$"))
     application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_\\d+$"))
+    
+    # Обработчик для кнопки "Я выполнил задание"
+    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
+    
+    # Обработчик для ответа пользователю
+    application.add_handler(CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$"))
 
     # ========== 2. ПОТОМ ДИАЛОГИ ==========
     
@@ -2135,7 +2146,7 @@ def main():
     )
     application.add_handler(ask_question_conv)
 
-    # Диалог для ответов администратора (НОВЫЙ И ВАЖНЫЙ!)
+    # Диалог для ответов администратора
     admin_reply_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$")],
         states={
@@ -2228,8 +2239,9 @@ def main():
     application.add_handler(CommandHandler("users_count", users_count_command))
     application.add_handler(CommandHandler("user_info", user_info_command))
     application.add_handler(CommandHandler("users_list", users_list_command))
+    application.add_handler(CommandHandler("check_admin", check_admin_command))
 
-    # ========== 4. ПОТОМ ОБЩИЙ ОБРАБОТЧИК КНОПОК ==========
+    # ========== 4. ПОТОМ ОБЩИЙ ОБРАБОТЧИК КНОПОК (САМЫЙ НИЗКИЙ ПРИОРИТЕТ) ==========
     application.add_handler(CallbackQueryHandler(main_button_handler))
 
     # ========== 5. ПОТОМ ОБРАБОТЧИКИ СООБЩЕНИЙ ==========
@@ -2237,7 +2249,7 @@ def main():
     application.add_handler(MessageHandler(filters.PHOTO, handle_payment_data))
 
     # ========== 6. ОБРАБОТЧИК ОШИБОК ==========
-    application.add_error_handler(error_handler )
+    application.add_error_handler(error_handler)
 
     logger.info("🚀 Запуск бота...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
