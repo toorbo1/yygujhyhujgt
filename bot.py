@@ -288,31 +288,20 @@ async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("❌ Неверный формат данных.")
         return
 
-    # Сохраняем ID пользователя в контекст
     context.user_data['reply_to_user'] = user_id
-    context.user_data['awaiting_reply'] = True
     
-    # Отправляем новое сообщение с запросом ответа
-    await query.message.reply_text(
+    await query.edit_message_text(
         f"📝 <b>Ответ пользователю {user_id}</b>\n\n"
         f"Напишите ваш ответ. Он будет отправлен пользователю в личные сообщения.\n"
         f"Отправьте /cancel для отмены.",
         parse_mode=ParseMode.HTML
     )
     
-    # Не редактируем старое сообщение, чтобы не потерять информацию о вопросе
-    await query.message.edit_text(
-        query.message.text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=None  # Убираем кнопку, чтобы не нажимали дважды
-    )
-    
     return ASK_QUESTION
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ответа администратора пользователю"""
-    # Проверяем, что мы действительно ждем ответ
-    if not context.user_data.get('awaiting_reply') or 'reply_to_user' not in context.user_data:
+    if 'reply_to_user' not in context.user_data:
         return ConversationHandler.END
 
     if update.message.text == '/cancel':
@@ -324,7 +313,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_text = update.message.text
     admin = update.effective_user
 
-    # Отправляем ответ пользователю
     try:
         await context.bot.send_message(
             user_id,
@@ -336,22 +324,17 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"✅ Ответ отправлен пользователю {user_id}."
         )
         
-        # Логируем в группу
-               # Логируем в группу
-        try:
-            await context.bot.send_message(
-                chat_id=GROUP_ID,
-                text=(
-                    f"✅ <b>Администратор ответил на вопрос</b>\n\n"
-                    f"👤 Пользователь: {user_id}\n"
-                    f"👨‍💼 Администратор: @{admin.username or admin.id}\n"
-                    f"📝 Ответ: {reply_text[:100]}{'...' if len(reply_text) > 100 else ''}"
-                ),
-                parse_mode=ParseMode.HTML,
-                message_thread_id=TOPIC_QUESTIONS
-            )
-        except Exception as e:
-            logger.error(f"Не удалось отправить лог в группу: {e}")
+        await context.bot.send_message(
+            chat_id=GROUP_ID,
+            text=(
+                f"✅ <b>Администратор ответил на вопрос</b>\n\n"
+                f"👤 Пользователь: {user_id}\n"
+                f"👨‍💼 Администратор: @{admin.username or admin.id}\n"
+                f"📝 Ответ: {reply_text}"
+            ),
+            parse_mode=ParseMode.HTML,
+            message_thread_id=TOPIC_QUESTIONS
+        )
         
     except Exception as e:
         logger.error(f"Не удалось отправить ответ пользователю {user_id}: {e}")
@@ -1804,9 +1787,8 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     data = query.data
     
-    # Пропускаем кнопки, которые обрабатываются в других обработчиках
-    if data.startswith(('complete_', 'approve_', 'reject_', 'answer_user_', 'ask_question')):
-        logger.info(f"Кнопка {data} будет обработана другим обработчиком")
+    # Проверяем, не обработан ли уже этот callback более конкретным обработчиком
+    if data.startswith(('complete_', 'approve_', 'reject_', 'answer_user_')):
         return
         
     await query.answer()
@@ -2119,24 +2101,18 @@ def main():
     )
     application.add_handler(conv_create_task)
 
-    # Вопросы и ответы - исправленная версия
     ask_question_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(ask_question_start, pattern="^ask_question$"),
-            CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$")
         ],
         states={
-            ASK_QUESTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_reply)
-            ],
+            ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_question_text)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        name="ask_question_conv",
-        allow_reentry=True,
-        persistent=False
+        name="ask_question_conv"
     )
     application.add_handler(ask_question_conv)
-    
+
     # ========== 3. ПОТОМ КОМАНДЫ ==========
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
