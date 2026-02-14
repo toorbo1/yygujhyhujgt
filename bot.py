@@ -260,14 +260,21 @@ async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        await context.bot.send_message(
+        # Отправляем в тему вопросов
+        sent_message = await context.bot.send_message(
             chat_id=GROUP_ID,
             text=text,
             parse_mode=ParseMode.HTML,
             reply_markup=reply_markup,
             message_thread_id=TOPIC_QUESTIONS
         )
+        
+        # Сохраняем ID сообщения и темы для возможного ответа
+        context.user_data['last_question_message_id'] = sent_message.message_id
+        context.user_data['last_question_thread_id'] = TOPIC_QUESTIONS
+        
         await update.message.reply_text("✅ Ваш вопрос отправлен администратору. Ожидайте ответа в личные сообщения.")
+        logger.info(f"✅ Вопрос от пользователя {user_id} отправлен в тему {TOPIC_QUESTIONS}, message_id: {sent_message.message_id}")
     except Exception as e:
         logger.error(f"Ошибка отправки вопроса в тему: {e}")
         await update.message.reply_text("❌ Не удалось отправить вопрос. Попробуйте позже.")
@@ -290,6 +297,10 @@ async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
 
     context.user_data['reply_to_user'] = user_id
+    
+    # Сохраняем информацию о том, откуда пришел запрос (ID сообщения и темы)
+    context.user_data['reply_message_id'] = query.message.message_id
+    context.user_data['reply_thread_id'] = query.message.message_thread_id
     
     await query.edit_message_text(
         f"📝 <b>Ответ пользователю {user_id}</b>\n\n"
@@ -326,18 +337,34 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"✅ Ответ отправлен пользователю {user_id}."
         )
         
-        # Отправляем подтверждение в группу
-        await context.bot.send_message(
-            chat_id=GROUP_ID,
-            text=(
-                f"✅ <b>Администратор ответил на вопрос</b>\n\n"
-                f"👤 Пользователь: {user_id}\n"
-                f"👨‍💼 Администратор: @{admin.username or admin.id}\n"
-                f"📝 Ответ: {reply_text}"
-            ),
-            parse_mode=ParseMode.HTML,
-            message_thread_id=TOPIC_QUESTIONS
-        )
+        # Отправляем подтверждение в группу - ВАЖНО: проверяем, что сообщение пришло из темы
+        thread_id = update.message.message_thread_id if update.message else None
+        
+        # Если сообщение пришло из темы, отправляем ответ в ту же тему
+        if thread_id:
+            await context.bot.send_message(
+                chat_id=GROUP_ID,
+                text=(
+                    f"✅ <b>Администратор ответил на вопрос</b>\n\n"
+                    f"👤 Пользователь: {user_id}\n"
+                    f"👨‍💼 Администратор: @{admin.username or admin.id}\n"
+                    f"📝 Ответ: {reply_text}"
+                ),
+                parse_mode=ParseMode.HTML,
+                message_thread_id=thread_id  # Используем ID темы, из которой пришел ответ
+            )
+        else:
+            # Если нет thread_id, отправляем в общий чат
+            await context.bot.send_message(
+                chat_id=GROUP_ID,
+                text=(
+                    f"✅ <b>Администратор ответил на вопрос</b>\n\n"
+                    f"👤 Пользователь: {user_id}\n"
+                    f"👨‍💼 Администратор: @{admin.username or admin.id}\n"
+                    f"📝 Ответ: {reply_text}"
+                ),
+                parse_mode=ParseMode.HTML
+            )
         
     except Exception as e:
         logger.error(f"Не удалось отправить ответ пользователю {user_id}: {e}")
@@ -1142,14 +1169,14 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
         ]
     ]
     try:
-        await context.bot.send_message(
+        sent_message = await context.bot.send_message(
             chat_id=GROUP_ID,
             text=text,
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(keyboard),
             message_thread_id=TOPIC_COMPLETED
         )
-        logger.info(f"✅ Запрос на подтверждение отправлен в тему {TOPIC_COMPLETED}")
+        logger.info(f"✅ Запрос на подтверждение отправлен в тему {TOPIC_COMPLETED}, message_id: {sent_message.message_id}")
     except Exception as e:
         logger.error(f"Не удалось отправить уведомление в тему 'сделанные задания': {e}")
         await query.edit_message_text("⚠️ Не удалось отправить запрос администратору. Попробуйте позже.")
@@ -2182,9 +2209,38 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message:
             logger.error(f"Message text: {update.message.text}")
 
-# ==================== ЗАПУСК ====================
+async def check_bot_permissions(application: Application):
+    """Проверяет права бота в группе"""
+    try:
+        chat = await application.bot.get_chat(GROUP_ID)
+        logger.info(f"✅ Группа найдена: {chat.title} (ID: {chat.id})")
+        
+        bot_member = await chat.get_member(application.bot.id)
+        logger.info(f"🤖 Статус бота в группе: {bot_member.status}")
+        
+        if bot_member.status not in ['administrator', 'creator']:
+            logger.warning("⚠️ Бот не является администратором группы! Некоторые функции могут не работать.")
+        else:
+            logger.info("✅ Бот является администратором группы")
+            
+        # Проверяем доступ к темам
+        try:
+            # Пробуем отправить тестовое сообщение в тему
+            await application.bot.send_message(
+                chat_id=GROUP_ID,
+                text="✅ Бот успешно подключен к группе и темам!",
+                message_thread_id=TOPIC_COMPLETED
+            )
+            logger.info("✅ Бот имеет доступ к темам")
+        except Exception as e:
+            logger.error(f"❌ Бот не имеет доступа к темам: {e}")
+            
+    except Exception as e:
+        logger.error(f"❌ Не удалось получить информацию о группе: {e}")
+
 async def post_init(application: Application):
     await Database.init_pool()
+    await check_bot_permissions(application)  # Добавьте эту строку
     logger.info("✅ Бот запущен и готов к работе!")
     logger.info(f"👑 Главный администратор: {MAIN_ADMIN_ID}")
     logger.info(f"📢 Группа ID: {GROUP_ID}")
