@@ -46,10 +46,8 @@ class Database:
                     created_date TIMESTAMP DEFAULT NOW()
                 )
             ''')
-            # Добавляем parent_id, если его нет (для старых таблиц)
             try:
                 await conn.execute('ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE')
-                logger.info("✅ Колонка parent_id в categories проверена/добавлена")
             except Exception as e:
                 logger.warning(f"Не удалось добавить parent_id в categories: {e}")
 
@@ -68,7 +66,8 @@ class Database:
                     completed_tasks INTEGER DEFAULT 0
                 )
             ''')
-            # Таблица запросов на подтверждение выполнения задания
+
+            # ---- Запросы на подтверждение выполнения задания ----
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS completion_requests (
                     id SERIAL PRIMARY KEY,
@@ -78,10 +77,11 @@ class Database:
                     status TEXT DEFAULT 'pending',   -- pending, approved, rejected
                     admin_id BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
                     processed_date TIMESTAMP,
-                    UNIQUE(task_id, user_id, status)  -- можно один активный запрос на пару
+                    UNIQUE(task_id, user_id, status)
                 )
             ''')
-                        # ---- Задания ----
+
+            # ---- Задания ----
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS tasks (
                     task_id TEXT PRIMARY KEY,
@@ -105,7 +105,7 @@ class Database:
                 )
             ''')
 
-            # Добавляем недостающие колонки в tasks (для совместимости со старыми базами)
+            # Добавляем недостающие колонки в tasks
             try:
                 await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL')
                 await conn.execute('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS target_type TEXT')
@@ -163,6 +163,20 @@ class Database:
                 )
             ''')
 
+            # ---- Ожидание ввода карты (payout) ----
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS pending_payouts (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+                    request_date TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(user_id, task_id)
+                )
+            ''')
+            # Индексы для скорости
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_pending_payouts_user ON pending_payouts(user_id)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_pending_payouts_task ON pending_payouts(task_id)')
+
             # ---- Статистика ----
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS stats (
@@ -180,6 +194,7 @@ class Database:
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_user_tasks_user ON user_tasks(user_id)')
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_tracking_links_user ON tracking_links(user_id)')
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_pending_unprocessed ON pending_links(processed)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_completion_requests_status ON completion_requests(status)')
             logger.info("✅ Таблицы созданы/проверены")
 
     @classmethod
@@ -249,7 +264,6 @@ class UserManager:
 
     @staticmethod
     async def get_all_user_ids() -> List[int]:
-        """Возвращает список ID всех пользователей (для рассылки)"""
         async with Database._pool.acquire() as conn:
             rows = await conn.fetch('SELECT user_id FROM users')
             return [row['user_id'] for row in rows]
@@ -260,19 +274,11 @@ class AdminManager:
 
     @staticmethod
     async def is_admin(user_id: int) -> bool:
-        # Главный админ всегда админ
         if user_id == AdminManager.MAIN_ADMIN_ID:
-            logger.info(f"Пользователь {user_id} является главным администратором")
             return True
-
         async with Database._pool.acquire() as conn:
             user = await conn.fetchrow('SELECT user_id, is_admin FROM users WHERE user_id = $1', user_id)
-            if user is None:
-                logger.warning(f"Пользователь {user_id} не найден в базе данных")
-                return False
-            is_admin_value = user['is_admin']
-            logger.info(f"Пользователь {user_id}, is_admin из БД: {is_admin_value} (тип: {type(is_admin_value)})")
-            return bool(is_admin_value) if is_admin_value is not None else False
+            return bool(user['is_admin']) if user else False
 
     @staticmethod
     async def is_main_admin(user_id: int) -> bool:
@@ -286,11 +292,7 @@ class AdminManager:
                 'UPDATE users SET is_admin = TRUE, added_by = $2 WHERE user_id = $1',
                 user_id, added_by or AdminManager.MAIN_ADMIN_ID
             )
-            if result == "UPDATE 0":
-                logger.error(f"Не удалось обновить пользователя {user_id}")
-                return False
-            logger.info(f"Администратор {user_id} успешно добавлен")
-            return True
+            return result == "UPDATE 1"
 
     @staticmethod
     async def remove_admin(user_id: int) -> bool:
@@ -369,17 +371,13 @@ class TaskManager:
             if category_id:
                 cat_exists = await conn.fetchval('SELECT id FROM categories WHERE id = $1', category_id)
                 if not cat_exists:
-                    logger.warning(f"Категория {category_id} не существует, устанавливаем NULL")
                     category_id = None
-
             await conn.execute('''
                 INSERT INTO tasks 
                     (task_id, category_id, title, description, target_type, target, reward, requirements, created_by, available, active)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ''', task_id, category_id, title, description, target_type, target, reward, requirements, created_by, True, True)
-
-            check = await conn.fetchrow('SELECT task_id, available, active, taken_by FROM tasks WHERE task_id = $1', task_id)
-            logger.info(f"✅ Задание {task_id} создано: available={check['available']}, active={check['active']}, taken_by={check['taken_by']}")
+            logger.info(f"✅ Задание {task_id} создано")
         return task_id
 
     @staticmethod
@@ -394,12 +392,8 @@ class TaskManager:
                 query += " AND category_id = $1"
                 args.append(category_id)
             query += " ORDER BY created_date DESC"
-
-            logger.info(f"SQL get_available: {query}, args={args}")
             rows = await conn.fetch(query, *args)
-            result = [dict(r) for r in rows]
-            logger.info(f"Найдено доступных заданий: {len(result)}")
-            return result
+            return [dict(r) for r in rows]
 
     @staticmethod
     async def get_by_id(task_id: str) -> Optional[dict]:
@@ -438,6 +432,7 @@ class TaskManager:
             )
             if not task:
                 return False
+            # Завершаем задание
             await conn.execute(
                 'UPDATE tasks SET completed = TRUE, completed_date = NOW(), proof = $2, active = FALSE WHERE task_id = $1',
                 task_id, proof
@@ -488,6 +483,33 @@ class TaskManager:
                 ORDER BY p.message_sent ASC
             ''')
             return [dict(r) for r in rows]
+
+    @staticmethod
+    async def remove_from_user(task_id: str, admin_id: int) -> bool:
+        """Удаляет задание у пользователя (делает его снова доступным). Возвращает True, если успешно."""
+        async with Database.transaction() as conn:
+            # Получаем задание
+            task = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1 FOR UPDATE', task_id)
+            if not task or not task['taken_by']:
+                return False
+            user_id = task['taken_by']
+
+            # Удаляем запись из user_tasks
+            await conn.execute('DELETE FROM user_tasks WHERE user_id = $1 AND task_id = $2', user_id, task_id)
+
+            # Обновляем задание
+            await conn.execute('''
+                UPDATE tasks SET taken_by = NULL, available = TRUE, assigned_date = NULL
+                WHERE task_id = $1
+            ''', task_id)
+
+            # Если есть запрос на подтверждение для этого задания, можно его отклонить (но необязательно)
+            await conn.execute('''
+                UPDATE completion_requests SET status = 'rejected', admin_id = $2, processed_date = NOW()
+                WHERE task_id = $1 AND status = 'pending'
+            ''', task_id, admin_id)
+
+            return True
 
 
 class TrackingManager:
@@ -583,21 +605,19 @@ class StatsManager:
             ''', days)
             return [dict(r) for r in rows]
 
+
 class CompletionManager:
     """Управление запросами на подтверждение выполнения заданий"""
 
     @staticmethod
     async def create_request(task_id: str, user_id: int) -> int:
-        """Создаёт запрос на подтверждение, возвращает ID запроса"""
         async with Database._pool.acquire() as conn:
-            # Проверим, нет ли уже активного запроса
             existing = await conn.fetchval('''
                 SELECT id FROM completion_requests
                 WHERE task_id = $1 AND user_id = $2 AND status = 'pending'
             ''', task_id, user_id)
             if existing:
                 return existing
-
             row = await conn.fetchrow('''
                 INSERT INTO completion_requests (task_id, user_id)
                 VALUES ($1, $2)
@@ -607,7 +627,6 @@ class CompletionManager:
 
     @staticmethod
     async def get_pending_requests() -> List[dict]:
-        """Возвращает все необработанные запросы с информацией о задании и пользователе"""
         async with Database._pool.acquire() as conn:
             rows = await conn.fetch('''
                 SELECT r.*,
@@ -628,62 +647,18 @@ class CompletionManager:
             return dict(row) if row else None
 
     @staticmethod
-    async def approve_request(request_id: int, admin_id: int) -> bool:
-        """Подтверждает выполнение, возвращает True если успешно"""
-        async with Database.transaction() as conn:
-            req = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1 FOR UPDATE', request_id)
-            if not req or req['status'] != 'pending':
-                return False
-
-            # Обновляем статус запроса
-            await conn.execute('''
+    async def set_approved(request_id: int, admin_id: int) -> bool:
+        """Подтверждает запрос, но НЕ завершает задание. Возвращает True, если успешно."""
+        async with Database._pool.acquire() as conn:
+            result = await conn.execute('''
                 UPDATE completion_requests
                 SET status = 'approved', admin_id = $2, processed_date = NOW()
-                WHERE id = $1
+                WHERE id = $1 AND status = 'pending'
             ''', request_id, admin_id)
-
-            # Вызываем завершение задания (поля proof нет, передаём пустую строку)
-            task_id = req['task_id']
-            user_id = req['user_id']
-
-            # Проверим, не завершено ли уже задание (на всякий случай)
-            task = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1', task_id)
-            if task and not task.get('completed'):
-                # Обновляем задание
-                await conn.execute('''
-                    UPDATE tasks
-                    SET completed = TRUE, completed_date = NOW(), active = FALSE
-                    WHERE task_id = $1
-                ''', task_id)
-
-                # Обновляем user_tasks
-                await conn.execute('''
-                    UPDATE user_tasks
-                    SET status = 'completed', completed_date = NOW(), earned = $2
-                    WHERE user_id = $3 AND task_id = $1
-                ''', task_id, task['reward'], user_id)
-
-                # Обновляем пользователя
-                await conn.execute('''
-                    UPDATE users
-                    SET total_earned = total_earned + $2, completed_tasks = completed_tasks + 1
-                    WHERE user_id = $1
-                ''', user_id, task['reward'])
-
-                # Обновляем статистику
-                await conn.execute('''
-                    INSERT INTO stats (date, tasks_completed, total_payout)
-                    VALUES (CURRENT_DATE, 1, $1)
-                    ON CONFLICT (date) DO UPDATE SET
-                        tasks_completed = stats.tasks_completed + 1,
-                        total_payout = stats.total_payout + $1
-                ''', task['reward'])
-
-            return True
+            return result == "UPDATE 1"
 
     @staticmethod
     async def reject_request(request_id: int, admin_id: int) -> bool:
-        """Отклоняет запрос"""
         async with Database._pool.acquire() as conn:
             result = await conn.execute('''
                 UPDATE completion_requests
@@ -691,3 +666,31 @@ class CompletionManager:
                 WHERE id = $1 AND status = 'pending'
             ''', request_id, admin_id)
             return result == "UPDATE 1"
+
+
+class PendingPayoutManager:
+    """Ожидание ввода карты после одобрения задания"""
+
+    @staticmethod
+    async def create(user_id: int, task_id: str) -> bool:
+        async with Database._pool.acquire() as conn:
+            try:
+                await conn.execute('''
+                    INSERT INTO pending_payouts (user_id, task_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id, task_id) DO NOTHING
+                ''', user_id, task_id)
+                return True
+            except Exception:
+                return False
+
+    @staticmethod
+    async def get_by_user(user_id: int) -> Optional[dict]:
+        async with Database._pool.acquire() as conn:
+            row = await conn.fetchrow('SELECT * FROM pending_payouts WHERE user_id = $1', user_id)
+            return dict(row) if row else None
+
+    @staticmethod
+    async def delete(user_id: int, task_id: str) -> None:
+        async with Database._pool.acquire() as conn:
+            await conn.execute('DELETE FROM pending_payouts WHERE user_id = $1 AND task_id = $2', user_id, task_id)
