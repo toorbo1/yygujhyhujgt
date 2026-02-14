@@ -1,3 +1,4 @@
+# bot.py
 import os
 import logging
 import asyncio
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 CATEGORY_NAME, CATEGORY_PARENT = range(2)
 TASK_TITLE, TASK_DESC, TASK_TYPE, TARGET, REWARD, REQUIREMENTS, TASK_CATEGORY = range(7, 14)
 ADD_ADMIN_ID, ADD_ADMIN_USERNAME = range(14, 16)
+BROADCAST_TEXT = 50  # новое состояние для рассылки
 
 # ==================== ОБЩИЕ КОМАНДЫ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -158,8 +160,6 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 <b>Статистика</b>\n"
         f"✅ Выполнено заданий: {stats['completed_count']}\n"
         f"⚡ Активных заданий: {stats['active_count']}\n"
-        f"💰 Заработано: {stats['total_earned']} ₽\n"
-        f"⭐ Рейтинг: {stats['rating']}"
     )
     if update.message:
         await update.message.reply_text(text, parse_mode=ParseMode.HTML)
@@ -185,8 +185,6 @@ async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-import urllib.parse  # добавьте в начало файла
-
 async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -207,7 +205,6 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = []
         if not task.get('completed', False):
-            # Формируем сообщение для поддержки
             support_msg = f"я сделал задание: {task['title']} (ID: {task['task_id']})"
             encoded_msg = urllib.parse.quote(support_msg)
             url = f"https://t.me/V2SHOP123?text={encoded_msg}"
@@ -215,6 +212,7 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
         await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
 # ==================== АДМИН-ПАНЕЛЬ ====================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -248,21 +246,19 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "👑 <b>АДМИН-ПАНЕЛЬ</b>\n\nВыберите действие:"
 
-    # Вместо редактирования старого сообщения отправляем новое
     await query.message.reply_text(
         text,
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
 async def check_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверка статуса администратора (только для отладки)"""
     user_id = update.effective_user.id
     
-    # Проверяем через AdminManager
     is_admin = await AdminManager.is_admin(user_id)
     is_main = await AdminManager.is_main_admin(user_id)
     
-    # Проверяем напрямую через БД
     async with Database._pool.acquire() as conn:
         user = await conn.fetchrow('SELECT user_id, is_admin FROM users WHERE user_id = $1', user_id)
         user_exists = user is not None
@@ -284,6 +280,7 @@ async def check_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
 # ==================== УПРАВЛЕНИЕ АДМИНАМИ ====================
 async def manage_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_main_admin(update.effective_user.id):
@@ -825,7 +822,6 @@ async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT
         logger.info(f"Требования сохранены: {context.user_data['requirements']}")
         logger.info(f"user_data после требований: {context.user_data}")
 
-        # Проверяем наличие обязательных полей
         required_fields = ['task_title', 'task_desc', 'task_type', 'target', 'reward']
         missing = [f for f in required_fields if f not in context.user_data]
         if missing:
@@ -918,7 +914,6 @@ async def create_task_finish(update, context):
         req = context.user_data.get('requirements', '')
         cat_id = context.user_data.get('category_id')
 
-        # Проверка обязательных полей
         if not all([title, desc, task_type, target, reward]):
             missing = []
             if not title: missing.append("название")
@@ -937,7 +932,6 @@ async def create_task_finish(update, context):
         if isinstance(update, Update):
             created_by = update.effective_user.id
         else:
-            # Для CallbackQuery используем from_user
             created_by = update.from_user.id
         
         task_id = await TaskManager.create(
@@ -1283,6 +1277,105 @@ async def check_tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
+# ==================== КОМАНДЫ ДЛЯ ГЛАВНОГО АДМИНА ====================
+
+async def users_count_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await AdminManager.is_main_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Только главный админ может использовать эту команду.")
+        return
+    async with Database._pool.acquire() as conn:
+        count = await conn.fetchval('SELECT COUNT(*) FROM users')
+    await update.message.reply_text(f"👥 Всего пользователей в боте: {count}")
+
+async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await AdminManager.is_main_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Только главный админ может использовать эту команду.")
+        return
+    try:
+        user_id = int(context.args[0])
+    except (IndexError, ValueError):
+        await update.message.reply_text("❌ Использование: /user_info <user_id>")
+        return
+
+    user = await UserManager.get(user_id)
+    if not user:
+        await update.message.reply_text(f"❌ Пользователь с ID {user_id} не найден.")
+        return
+
+    stats = await UserManager.get_stats(user_id)
+    joined_date = user['joined_date'].strftime('%d.%m.%Y %H:%M') if user['joined_date'] else 'неизвестно'
+    text = (
+        f"👤 <b>Информация о пользователе</b>\n\n"
+        f"🆔 ID: <code>{user_id}</code>\n"
+        f"📝 Имя: {user['first_name']}\n"
+        f"📧 Username: @{user['username'] if user['username'] else 'нет'}\n"
+        f"📅 Дата регистрации: {joined_date}\n"
+        f"👑 Администратор: {'✅ Да' if user.get('is_admin') else '❌ Нет'}\n\n"
+        f"📊 <b>Статистика</b>\n"
+        f"✅ Выполнено заданий: {stats['completed_count']}\n"
+        f"⚡ Активных заданий: {stats['active_count']}\n"
+        f"💰 Всего заработано: {stats['total_earned']} ₽\n"
+        f"⭐ Рейтинг: {stats['rating']}"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+async def users_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await AdminManager.is_main_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Только главный админ может использовать эту команду.")
+        return
+    async with Database._pool.acquire() as conn:
+        rows = await conn.fetch('SELECT user_id, username, first_name FROM users ORDER BY joined_date DESC LIMIT 50')
+    if not rows:
+        await update.message.reply_text("📭 Нет пользователей.")
+        return
+    text = "📋 <b>Последние 50 пользователей:</b>\n\n"
+    for row in rows:
+        username = f"@{row['username']}" if row['username'] else "нет username"
+        text += f"• <code>{row['user_id']}</code> — {row['first_name']} ({username})\n"
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+# ==================== РАССЫЛКА ====================
+
+async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await AdminManager.is_main_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Только главный админ может делать рассылку.")
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "📢 <b>Рассылка сообщения</b>\n\n"
+        "Введите текст для рассылки всем пользователям (можно использовать HTML).\n"
+        "Или отправьте /cancel для отмены.",
+        parse_mode=ParseMode.HTML
+    )
+    return BROADCAST_TEXT
+
+async def broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Рассылка отменена.")
+        return ConversationHandler.END
+
+    text = update.message.text
+    await update.message.reply_text("⏳ Начинаю рассылку... Это может занять некоторое время.")
+
+    user_ids = await UserManager.get_all_user_ids()
+    success = 0
+    failed = 0
+
+    for uid in user_ids:
+        try:
+            await context.bot.send_message(uid, text, parse_mode=ParseMode.HTML)
+            success += 1
+            await asyncio.sleep(0.05)  # задержка, чтобы избежать flood
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение пользователю {uid}: {e}")
+            failed += 1
+
+    await update.message.reply_text(
+        f"✅ Рассылка завершена!\n"
+        f"📊 Успешно: {success}\n"
+        f"❌ Не удалось: {failed}"
+    )
+    return ConversationHandler.END
+
 # ==================== ГЛАВНЫЙ ОБРАБОТЧИК КНОПОК ====================
 async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1311,7 +1404,6 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await take_task_callback(update, context)
     # Админские кнопки
     elif data.startswith("admin_"):
-        # Проверяем права администратора
         if not await AdminManager.is_admin(update.effective_user.id):
             await query.answer("⛔ У вас нет прав администратора!", show_alert=True)
             return
@@ -1404,13 +1496,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message:
             logger.error(f"Message text: {update.message.text}")
 
-    try:
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "❌ Произошла внутренняя ошибка. Администратор уже уведомлен."
-            )
-    except:
-        pass
+    # Пользователю не отправляем сообщение об ошибке, чтобы не показывать "внутренняя ошибка"
 
 # ==================== ЗАПУСК ====================
 async def post_init(application: Application):
@@ -1443,6 +1529,22 @@ def main():
     application.add_handler(CommandHandler("remove_admin", remove_admin_command))
     application.add_handler(CommandHandler("give_link", give_link_command))
     application.add_handler(CommandHandler("check_tasks", check_tasks_command))
+
+    # Команды для главного админа
+    application.add_handler(CommandHandler("users_count", users_count_command))
+    application.add_handler(CommandHandler("user_info", user_info_command))
+    application.add_handler(CommandHandler("users_list", users_list_command))
+
+    # Рассылка (только для главного админа)
+    broadcast_conv = ConversationHandler(
+        entry_points=[CommandHandler("broadcast", broadcast_start)],
+        states={
+            BROADCAST_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_text)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        name="broadcast_conv"
+    )
+    application.add_handler(broadcast_conv)
 
     # ConversationHandler для добавления админа
     conv_add_admin = ConversationHandler(

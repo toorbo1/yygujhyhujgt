@@ -1,3 +1,4 @@
+# database.py
 import os
 import logging
 from typing import Dict, List, Optional, Any
@@ -234,30 +235,32 @@ class UserManager:
                 'rating': completed * 10
             }
 
+    @staticmethod
+    async def get_all_user_ids() -> List[int]:
+        """Возвращает список ID всех пользователей (для рассылки)"""
+        async with Database._pool.acquire() as conn:
+            rows = await conn.fetch('SELECT user_id FROM users')
+            return [row['user_id'] for row in rows]
+
 
 class AdminManager:
     MAIN_ADMIN_ID = int(os.environ.get('MAIN_ADMIN_ID', '8358009538'))
 
     @staticmethod
     async def is_admin(user_id: int) -> bool:
-    # Главный админ всегда админ
-      if user_id == AdminManager.MAIN_ADMIN_ID:
-          logger.info(f"Пользователь {user_id} является главным администратором")
-          return True
-      
-      async with Database._pool.acquire() as conn:
-          # Проверяем наличие пользователя в таблице users
-          user = await conn.fetchrow('SELECT user_id, is_admin FROM users WHERE user_id = $1', user_id)
-          
-          if user is None:
-              logger.warning(f"Пользователь {user_id} не найден в базе данных")
-              return False
-          
-          is_admin_value = user['is_admin']
-          logger.info(f"Пользователь {user_id}, is_admin из БД: {is_admin_value} (тип: {type(is_admin_value)})")
-          
-          # Явно преобразуем в bool
-          return bool(is_admin_value) if is_admin_value is not None else False
+        # Главный админ всегда админ
+        if user_id == AdminManager.MAIN_ADMIN_ID:
+            logger.info(f"Пользователь {user_id} является главным администратором")
+            return True
+
+        async with Database._pool.acquire() as conn:
+            user = await conn.fetchrow('SELECT user_id, is_admin FROM users WHERE user_id = $1', user_id)
+            if user is None:
+                logger.warning(f"Пользователь {user_id} не найден в базе данных")
+                return False
+            is_admin_value = user['is_admin']
+            logger.info(f"Пользователь {user_id}, is_admin из БД: {is_admin_value} (тип: {type(is_admin_value)})")
+            return bool(is_admin_value) if is_admin_value is not None else False
 
     @staticmethod
     async def is_main_admin(user_id: int) -> bool:
@@ -266,20 +269,14 @@ class AdminManager:
     @staticmethod
     async def add_admin(user_id: int, username: str = "", added_by: int = None) -> bool:
         async with Database.transaction() as conn:
-            # Сначала убедимся, что пользователь существует
             await UserManager.get_or_create(user_id, username, "")
-            
-            # Обновляем флаг is_admin
             result = await conn.execute(
                 'UPDATE users SET is_admin = TRUE, added_by = $2 WHERE user_id = $1',
                 user_id, added_by or AdminManager.MAIN_ADMIN_ID
             )
-            
-            # Проверим, что обновление прошло успешно
             if result == "UPDATE 0":
                 logger.error(f"Не удалось обновить пользователя {user_id}")
                 return False
-                
             logger.info(f"Администратор {user_id} успешно добавлен")
             return True
 
