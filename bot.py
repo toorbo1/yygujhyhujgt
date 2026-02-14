@@ -1160,10 +1160,11 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
 async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.info(f"✅ approve_request_callback вызван с data: {query.data}")
-    logger.info(f"Admin {admin_id} нажал 'Подтвердить'")
     await query.answer()
+    
+    # ПОЛУЧАЕМ admin_id ДО ЛОГИРОВАНИЯ
     admin_id = update.effective_user.id
-    logger.info(f"Admin {admin_id} нажал 'Подтвердить'")
+    logger.info(f"Администратор {admin_id} нажал 'Подтвердить'")
 
     if not await AdminManager.is_admin(admin_id):
         await query.edit_message_text("⛔ У вас нет прав администратора.")
@@ -1222,10 +1223,11 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
 async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.info(f"❌ reject_request_callback вызван с data: {query.data}")
-    logger.info(f"Admin {admin_id} нажал 'Отклонить'")
     await query.answer()
+    
+    # ПОЛУЧАЕМ admin_id ДО ЛОГИРОВАНИЯ
     admin_id = update.effective_user.id
-    logger.info(f"Admin {admin_id} нажал 'Отклонить'")
+    logger.info(f"Администратор {admin_id} нажал 'Отклонить'")
 
     if not await AdminManager.is_admin(admin_id):
         await query.edit_message_text("⛔ У вас нет прав администратора.")
