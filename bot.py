@@ -1162,7 +1162,6 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
     logger.info(f"✅ approve_request_callback вызван с data: {query.data}")
     await query.answer()
     
-    # ПОЛУЧАЕМ admin_id ДО ЛОГИРОВАНИЯ
     admin_id = update.effective_user.id
     logger.info(f"Администратор {admin_id} нажал 'Подтвердить'")
 
@@ -1176,8 +1175,13 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("❌ Неверный формат запроса.")
         return
 
+    # Получаем информацию о запросе
     req = await CompletionManager.get_request(request_id)
-    if not req or req['status'] != 'pending':
+    if not req:
+        await query.edit_message_text("❌ Запрос не найден.")
+        return
+    
+    if req['status'] != 'pending':
         await query.edit_message_text("❌ Запрос уже обработан.")
         return
 
@@ -1187,18 +1191,12 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("❌ Задание не найдено.")
         return
 
-    async with Database.transaction() as conn:
-        # Обновляем статус запроса
-        await conn.execute(
-            'UPDATE completion_requests SET status = $1, admin_id = $2, processed_date = NOW() WHERE id = $3',
-            'approved', admin_id, request_id
-        )
-        
-        # Обновляем статус в user_tasks на "ожидает оплаты"
-        await conn.execute(
-            'UPDATE user_tasks SET status = $1 WHERE user_id = $2 AND task_id = $3',
-            'awaiting_payment', req['user_id'], req['task_id']
-        )
+    # Подтверждаем запрос через CompletionManager
+    success = await CompletionManager.approve_request(request_id, admin_id)
+    
+    if not success:
+        await query.edit_message_text("❌ Не удалось подтвердить запрос.")
+        return
 
     # Добавляем запись в payment_awaiting
     await PaymentAwaitingManager.add(req['user_id'], req['task_id'], request_id)
@@ -1225,7 +1223,6 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
     logger.info(f"❌ reject_request_callback вызван с data: {query.data}")
     await query.answer()
     
-    # ПОЛУЧАЕМ admin_id ДО ЛОГИРОВАНИЯ
     admin_id = update.effective_user.id
     logger.info(f"Администратор {admin_id} нажал 'Отклонить'")
 
@@ -1239,15 +1236,22 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("❌ Неверный формат запроса.")
         return
 
+    # Получаем информацию о запросе
     req = await CompletionManager.get_request(request_id)
-    if not req or req['status'] != 'pending':
+    if not req:
+        await query.edit_message_text("❌ Запрос не найден.")
+        return
+    
+    if req['status'] != 'pending':
         await query.edit_message_text("❌ Запрос уже обработан.")
         return
 
     # Получаем информацию о задании
     task = await TaskManager.get_by_id(req['task_id'])
 
+    # Отклоняем запрос
     success = await CompletionManager.reject_request(request_id, admin_id)
+    
     if success:
         # Создаем клавиатуру с кнопкой "Задать вопрос"
         keyboard = [[InlineKeyboardButton("📝 Задать вопрос", callback_data="ask_question")]]

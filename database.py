@@ -639,12 +639,26 @@ class CompletionManager:
 
     @staticmethod
     async def approve_request(request_id: int, admin_id: int) -> bool:
-        """Подтверждает выполнение, возвращает True если успешно"""
-        async with Database.transaction() as conn:
-            req = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1 FOR UPDATE', request_id)
-            if not req or req['status'] != 'pending':
-                return False
-
+      """Подтверждает выполнение, возвращает True если успешно"""
+      logger.info(f"CompletionManager.approve_request: request_id={request_id}, admin_id={admin_id}")
+      try:
+            async with Database.transaction() as conn:
+              req = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1 FOR UPDATE', request_id)
+              if not req:
+                  logger.error(f"Запрос {request_id} не найден")
+                  return False
+              if req['status'] != 'pending':
+                  logger.error(f"Запрос {request_id} имеет статус {req['status']}, ожидался pending")
+                  return False
+  
+            # Обновляем статус запроса
+            await conn.execute('''
+                UPDATE completion_requests
+                SET status = 'approved', admin_id = $2, processed_date = NOW()
+                WHERE id = $1
+            ''', request_id, admin_id)
+            
+            logger.info(f"Запрос {request_id} обновлен на approved")
             # Обновляем статус запроса
             await conn.execute('''
                 UPDATE completion_requests
@@ -689,8 +703,10 @@ class CompletionManager:
                         total_payout = stats.total_payout + $1
                 ''', task['reward'])
 
-            return True
-
+                      
+      except Exception as e:
+        logger.error(f"Ошибка в approve_request: {e}")
+        return False
     @staticmethod
     async def reject_request(request_id: int, admin_id: int) -> bool:
         """Отклоняет запрос"""
