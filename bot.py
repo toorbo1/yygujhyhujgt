@@ -217,7 +217,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Попытка открыть админ-панель пользователем {user_id}")
     
-    # Проверка прав администратора
     is_admin = await AdminManager.is_admin(user_id)
     logger.info(f"Результат проверки is_admin: {is_admin}")
     
@@ -231,8 +230,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     is_main = await AdminManager.is_main_admin(user_id)
     logger.info(f"Результат проверки is_main_admin: {is_main}")
-
-    # ... остальной код ...
 
     keyboard = [
         [InlineKeyboardButton("📋 Управление заданиями", callback_data="admin_tasks_menu")],
@@ -248,7 +245,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "👑 <b>АДМИН-ПАНЕЛЬ</b>\n\nВыберите действие:"
 
-    await query.edit_message_text(
+    # Вместо редактирования старого сообщения отправляем новое
+    await query.message.reply_text(
         text,
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(keyboard)
