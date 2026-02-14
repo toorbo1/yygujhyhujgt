@@ -1245,33 +1245,38 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await show_tasks(update, context, category_id=cat_id)
     elif data.startswith("take_"):
         await take_task_callback(update, context)
-    elif data == "admin_panel":
-        await admin_panel(update, context)
-    elif data == "admin_tasks_menu":
-        await tasks_menu(update, context)
-    elif data == "admin_categories_menu":
-        await categories_menu(update, context)
-    elif data == "admin_pending":
-        await pending_list_callback(update, context)
-    elif data == "admin_stats":
-        await stats_callback(update, context)
-    elif data == "admin_manage_admins":
-        await manage_admins(update, context)
-    elif data == "admin_list_admins":
-        await list_admins_callback(update, context)
-    elif data == "admin_remove_admin_list":
-        await remove_admin_list(update, context)
-    elif data.startswith("remove_admin_"):
-        await remove_admin_callback(update, context)
-    elif data == "admin_list_categories":
-        await list_categories_callback(update, context)
-    elif data == "admin_del_category":
-        await delete_category_prompt(update, context)
-    elif data.startswith("delcat_"):
-        await delete_category_callback(update, context)
-    elif data == "admin_create_task":
-        await create_task_start(update, context)
-
+    elif data.startswith("admin_"):  # Все админские кнопки начинаются с admin_
+        # Проверяем права администратора
+        if not await AdminManager.is_admin(update.effective_user.id):
+            await query.answer("⛔ У вас нет прав администратора!", show_alert=True)
+            return
+        
+        if data == "admin_panel":
+            await admin_panel(update, context)
+        elif data == "admin_tasks_menu":
+            await tasks_menu(update, context)
+        elif data == "admin_categories_menu":
+            await categories_menu(update, context)
+        elif data == "admin_pending":
+            await pending_list_callback(update, context)
+        elif data == "admin_stats":
+            await stats_callback(update, context)
+        elif data == "admin_manage_admins":
+            await manage_admins(update, context)
+        elif data == "admin_list_admins":
+            await list_admins_callback(update, context)
+        elif data == "admin_remove_admin_list":
+            await remove_admin_list(update, context)
+        elif data.startswith("remove_admin_"):
+            await remove_admin_callback(update, context)
+        elif data == "admin_list_categories":
+            await list_categories_callback(update, context)
+        elif data == "admin_del_category":
+            await delete_category_prompt(update, context)
+        elif data.startswith("delcat_"):
+            await delete_category_callback(update, context)
+        elif data == "admin_create_task":
+            await create_task_start(update, context)
 # ==================== КОМАНДЫ ====================
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_main_admin(update.effective_user.id):
