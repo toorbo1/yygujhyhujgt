@@ -13,10 +13,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from dotenv import load_dotenv
 from telegram.error import BadRequest
-import secrets
 load_dotenv()
-
-# Импорты менеджеров (теперь с кэшированием)
 from database import (
     Database, UserManager, AdminManager, CategoryManager,
     TaskManager, TrackingManager, PendingManager, StatsManager,
@@ -28,13 +25,14 @@ WELCOME_VIDEO_PATH = os.path.join(os.path.dirname(__file__), "video.mp4")
 # ==================== НАСТРОЙКИ ====================
 TOKEN = os.environ.get('BOT_TOKEN')
 MAIN_ADMIN_ID = int(os.environ.get('MAIN_ADMIN_ID', '8358009538'))
-GROUP_ID = int(os.environ.get('GROUP_ID', '-1003768763215'))
+GROUP_ID = int(os.environ.get('GROUP_ID', '-1003768763215'))  # ID группы с префиксом -100
 BOT_USERNAME = os.environ.get('BOT_USERNAME', 'TrafficWorkeee_bot')
 
-TOPIC_LINKS = 25
-TOPIC_QUESTIONS = 27
-TOPIC_COMPLETED = 29
-REPORT_TOPIC = 45
+# ID тем (топиков) в группе - замените на свои значения
+TOPIC_LINKS = 25      # для сообщений "ждут ссылку"
+TOPIC_QUESTIONS = 27  # для вопросов пользователей
+TOPIC_COMPLETED = 29  # для подтверждения выполненных заданий
+REPORT_TOPIC = 45     # для отчётов по выплатам
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -42,19 +40,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Состояния для ConversationHandler (без изменений)
+# Состояния для ConversationHandler
 CATEGORY_NAME, CATEGORY_PARENT = range(2)
 TASK_TITLE, TASK_DESC, TASK_TYPE, TARGET, REWARD, REQUIREMENTS, TASK_CATEGORY = range(7, 14)
 ADD_ADMIN_ID, ADD_ADMIN_USERNAME = range(14, 16)
 BROADCAST_TEXT = 50
 ASK_QUESTION = 51
 REMOVE_TASK_USER_ID, REMOVE_TASK_TASK_ID = range(52, 54)
-DELETE_TASK_ID = 55
+DELETE_TASK_ID = 55  # новое состояние для удаления задания
 
 # ==================== ОБЩИЕ КОМАНДЫ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    # get_or_create теперь обновляет только при необходимости
     await UserManager.get_or_create(user.id, user.username or "", user.first_name)
 
     args = context.args
@@ -71,26 +68,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Ссылка недействительна.")
         return
-
     welcome_text = (
-        "🚀 Зарабатывай на белом трафике!\n\n"
-        "Наш бот — личный кабинет с ежедневными заданиями по привлечению трафика в Telegram 📲 "
-        "Без серых схем и накруток — только живые люди и честные выплаты 💎\n\n"
-        "Как это работает? 👇\n"
-        "✅ Выбираешь задание\n"
-        "✅ Приводишь целевой трафик\n"
-        "✅ Получаешь оплату 💰\n\n"
-        "Всё автоматически: результат фиксируется, деньги начисляются на баланс 📊 "
-        "Ты сам решаешь, сколько зарабатывать.\n\n"
-        "Почему мы? ⚡️\n"
-        "✨ Стабильные выплаты\n"
-        "✨ Прозрачные условия\n"
-        "✨ Поддержка 24/7\n"
-        "✨ Постоянный поток заказов\n\n"
-        "Готов начать? 🚀\n"
-        "Переходи в канал с мануалом и поддержкой кураторов:\n"
-        "https://t.me/Trafficork"
-    )
+    "🚀 Зарабатывай на белом трафике!\n\n"
+    "Наш бот — личный кабинет с ежедневными заданиями по привлечению трафика в Telegram 📲 "
+    "Без серых схем и накруток — только живые люди и честные выплаты 💎\n\n"
+    "Как это работает? 👇\n"
+    "✅ Выбираешь задание\n"
+    "✅ Приводишь целевой трафик\n"
+    "✅ Получаешь оплату 💰\n\n"
+    "Всё автоматически: результат фиксируется, деньги начисляются на баланс 📊 "
+    "Ты сам решаешь, сколько зарабатывать.\n\n"
+    "Почему мы? ⚡️\n"
+    "✨ Стабильные выплаты\n"
+    "✨ Прозрачные условия\n"
+    "✨ Поддержка 24/7\n"
+    "✨ Постоянный поток заказов\n\n"
+    "Готов начать? 🚀\n"
+    "Переходи в канал с мануалом и поддержкой кураторов:\n"
+    "https://t.me/Trafficork"
+)
+
 
     keyboard = [
         [InlineKeyboardButton("📋 Доступные задания", callback_data="user_tasks")],
@@ -98,7 +95,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("❓ Помощь", callback_data="user_help")]
     ]
 
-    is_admin = await AdminManager.is_admin(user.id)   # теперь кэшируется
+    is_admin = await AdminManager.is_admin(user.id)
     if is_admin:
         keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data="admin_panel")])
 
@@ -148,7 +145,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     keyboard = [[InlineKeyboardButton("📝 Задать вопрос", callback_data="ask_question")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     if update.message:
         await update.message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     else:
@@ -156,19 +153,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
-    # Параллельное выполнение независимых запросов
-    user_task = asyncio.create_task(UserManager.get(user_id))
-    stats_task = asyncio.create_task(UserManager.get_stats(user_id))
-    user = await user_task
+    user = await UserManager.get(user_id)
     if not user:
         if update.message:
             await update.message.reply_text("❌ Профиль не найден. Введите /start для регистрации.")
         else:
             await update.callback_query.message.reply_text("❌ Профиль не найден. Введите /start для регистрации.")
         return
-    stats = await stats_task
-
+    stats = await UserManager.get_stats(user_id)
     joined_date = user['joined_date'].strftime('%d.%m.%Y') if user['joined_date'] else 'неизвестно'
     text = (
         f"👤 <b>Профиль</b>\n\n"
@@ -187,7 +179,6 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # get_children теперь использует кэшированный список категорий
     categories = await CategoryManager.get_children(None)
     keyboard = []
     for cat in categories:
@@ -225,16 +216,17 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if task.get('earned'):
             text += f"Заработано: {task['earned']} ₽\n"
-
+        
         keyboard = []
         if not task.get('completed', False):
             keyboard.append([InlineKeyboardButton("✅ Я выполнил задание", callback_data=f"complete_{task['task_id']}")])
-
+        
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
         await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
 # ==================== ОБРАБОТЧИК ВОПРОСОВ ====================
 async def ask_question_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало диалога вопроса"""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
@@ -246,6 +238,7 @@ async def ask_question_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ASK_QUESTION
 
 async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение текста вопроса и отправка в тему 'вопросы' с кнопкой ответа"""
     if update.message.text == '/cancel':
         await update.message.reply_text("❌ Вопрос отменён.")
         return ConversationHandler.END
@@ -269,6 +262,7 @@ async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
+        # Отправляем в тему вопросов
         sent_message = await context.bot.send_message(
             chat_id=GROUP_ID,
             text=text,
@@ -276,9 +270,11 @@ async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup,
             message_thread_id=TOPIC_QUESTIONS
         )
+        
+        # Сохраняем ID сообщения и темы для возможного ответа
         context.user_data['last_question_message_id'] = sent_message.message_id
         context.user_data['last_question_thread_id'] = TOPIC_QUESTIONS
-
+        
         await update.message.reply_text("✅ Ваш вопрос отправлен администратору. Ожидайте ответа в личные сообщения.")
         logger.info(f"✅ Вопрос от пользователя {user_id} отправлен в тему {TOPIC_QUESTIONS}, message_id: {sent_message.message_id}")
     except Exception as e:
@@ -288,9 +284,10 @@ async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатия на кнопку 'Ответить пользователю'"""
     query = update.callback_query
     await query.answer()
-
+    
     if not await AdminManager.is_admin(update.effective_user.id):
         await query.edit_message_text("⛔ У вас нет прав администратора.")
         return ConversationHandler.END
@@ -302,19 +299,22 @@ async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
 
     context.user_data['reply_to_user'] = user_id
+    
+    # Сохраняем информацию о том, откуда пришел запрос (ID сообщения и темы)
     context.user_data['reply_message_id'] = query.message.message_id
     context.user_data['reply_thread_id'] = query.message.message_thread_id
-
+    
     await query.edit_message_text(
         f"📝 <b>Ответ пользователю {user_id}</b>\n\n"
         f"Напишите ваш ответ. Он будет отправлен пользователю в личные сообщения.\n"
         f"Отправьте /cancel для отмены.",
         parse_mode=ParseMode.HTML
     )
-
+    
     return ASK_QUESTION
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ответа администратора пользователю"""
     if 'reply_to_user' not in context.user_data:
         return ConversationHandler.END
 
@@ -328,18 +328,21 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     admin = update.effective_user
 
     try:
+        # Отправляем ответ пользователю
         await context.bot.send_message(
             user_id,
             f"📝 <b>Ответ от администратора</b>\n\n{reply_text}",
             parse_mode=ParseMode.HTML
         )
-
+        
         await update.message.reply_text(
             f"✅ Ответ отправлен пользователю {user_id}."
         )
-
+        
+        # Отправляем подтверждение в группу - ВАЖНО: проверяем, что сообщение пришло из темы
         thread_id = update.message.message_thread_id if update.message else None
-
+        
+        # Если сообщение пришло из темы, отправляем ответ в ту же тему
         if thread_id:
             await context.bot.send_message(
                 chat_id=GROUP_ID,
@@ -350,9 +353,10 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     f"📝 Ответ: {reply_text}"
                 ),
                 parse_mode=ParseMode.HTML,
-                message_thread_id=thread_id
+                message_thread_id=thread_id  # Используем ID темы, из которой пришел ответ
             )
         else:
+            # Если нет thread_id, отправляем в общий чат
             await context.bot.send_message(
                 chat_id=GROUP_ID,
                 text=(
@@ -363,7 +367,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 ),
                 parse_mode=ParseMode.HTML
             )
-
+        
     except Exception as e:
         logger.error(f"Не удалось отправить ответ пользователю {user_id}: {e}")
         await update.message.reply_text(
@@ -378,8 +382,10 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Попытка открыть админ-панель пользователем {user_id}")
-
-    is_admin = await AdminManager.is_admin(user_id)   # кэшируется
+    
+    is_admin = await AdminManager.is_admin(user_id)
+    logger.info(f"Результат проверки is_admin: {is_admin}")
+    
     if not is_admin:
         if update.callback_query:
             await update.callback_query.answer("⛔ У вас нет прав администратора!", show_alert=True)
@@ -389,6 +395,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     is_main = await AdminManager.is_main_admin(user_id)
+    logger.info(f"Результат проверки is_main_admin: {is_main}")
 
     keyboard = [
         [InlineKeyboardButton("📋 Управление заданиями", callback_data="admin_tasks_menu")],
@@ -400,11 +407,14 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_main:
         keyboard.append([InlineKeyboardButton("👥 Управление админами", callback_data="admin_manage_admins")])
         keyboard.append([InlineKeyboardButton("🗑 Удаление заданий у пользователей", callback_data="admin_remove_user_task_start")])
-
+    
+    # Добавляем кнопку удаления задания для всех админов
     keyboard.append([InlineKeyboardButton("❌ Удалить задание", callback_data="admin_delete_task_start")])
+
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_main")])
 
     text = "👑 <b>АДМИН-ПАНЕЛЬ</b>\n\nВыберите действие:"
+
     await query.message.reply_text(
         text,
         parse_mode=ParseMode.HTML,
@@ -413,14 +423,15 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
     is_admin = await AdminManager.is_admin(user_id)
     is_main = await AdminManager.is_main_admin(user_id)
-
+    
     async with Database._pool.acquire() as conn:
         user = await conn.fetchrow('SELECT user_id, is_admin FROM users WHERE user_id = $1', user_id)
         user_exists = user is not None
         db_is_admin = user['is_admin'] if user else None
-
+    
     text = (
         f"🔍 <b>Проверка статуса администратора</b>\n\n"
         f"👤 <b>Ваш ID:</b> <code>{user_id}</code>\n"
@@ -435,7 +446,7 @@ async def check_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"2. Убедитесь, что вы зарегистрированы (/start)\n"
         f"3. Попробуйте добавить себя через /add_admin {user_id}"
     )
-
+    
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 # ==================== УПРАВЛЕНИЕ АДМИНАМИ ====================
@@ -513,6 +524,7 @@ async def add_admin_username(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             f"✅ Пользователь {user_id} успешно назначен администратором!"
         )
+
         try:
             await context.bot.send_message(
                 user_id,
@@ -522,6 +534,7 @@ async def add_admin_username(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
         except:
             pass
+
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при добавлении администратора: {e}")
 
@@ -577,6 +590,7 @@ async def remove_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             f"✅ Администратор {user_id} успешно удален.",
             parse_mode=ParseMode.HTML
         )
+
         try:
             await context.bot.send_message(
                 user_id,
@@ -677,7 +691,6 @@ async def add_category_parent(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     elif query.data == "cat_parent_select":
-        # get_children теперь использует кэшированный список категорий
         cats = await CategoryManager.get_children(None)
         if not cats:
             await query.edit_message_text(
@@ -715,7 +728,6 @@ async def add_category_parent(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def list_categories_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    # get_all теперь кэшируется
     cats = await CategoryManager.get_all()
 
     if not cats:
@@ -730,7 +742,7 @@ async def list_categories_callback(update: Update, context: ContextTypes.DEFAULT
         indent = "  " * (2 if cat['parent_id'] else 0)
         parent_info = ""
         if cat['parent_id']:
-            parent = await CategoryManager.get_by_id(cat['parent_id'])  # отдельный запрос, но редко
+            parent = await CategoryManager.get_by_id(cat['parent_id'])
             if parent:
                 parent_info = f" (в: {parent['name']})"
         text += f"{indent}• <b>{cat['name']}</b> (ID: {cat['id']}){parent_info}\n"
@@ -963,6 +975,9 @@ async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT
         req = update.message.text
         context.user_data['requirements'] = req if req.lower() != 'нет' else ""
 
+        logger.info(f"Требования сохранены: {context.user_data['requirements']}")
+        logger.info(f"user_data после требований: {context.user_data}")
+
         required_fields = ['task_title', 'task_desc', 'task_type', 'target', 'reward']
         missing = [f for f in required_fields if f not in context.user_data]
         if missing:
@@ -973,8 +988,9 @@ async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT
             context.user_data.clear()
             return ConversationHandler.END
 
-        # get_all теперь кэшируется
         cats = await CategoryManager.get_all()
+        logger.info(f"Получено категорий: {len(cats)}")
+
         if not cats:
             context.user_data['category_id'] = None
             await create_task_finish(update, context)
@@ -1012,6 +1028,9 @@ async def create_task_category_callback(update: Update, context: ContextTypes.DE
         query = update.callback_query
         await query.answer()
 
+        logger.info(f"Выбрана категория: {query.data}")
+        logger.info(f"user_data перед выбором категории: {context.user_data}")
+
         if query.data == "task_cat_cancel":
             await query.edit_message_text("❌ Создание задания отменено.")
             context.user_data.clear()
@@ -1019,9 +1038,11 @@ async def create_task_category_callback(update: Update, context: ContextTypes.DE
 
         if query.data == "task_cat_none":
             context.user_data['category_id'] = None
+            logger.info("Категория: None")
         else:
             cat_id = int(query.data.split('_')[-1])
             context.user_data['category_id'] = cat_id
+            logger.info(f"Категория ID: {cat_id}")
 
         await create_task_finish(query, context)
         context.user_data.clear()
@@ -1031,12 +1052,16 @@ async def create_task_category_callback(update: Update, context: ContextTypes.DE
         logger.error(f"❌ Ошибка в create_task_category_callback: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        await query.edit_message_text(f"❌ Ошибка: {str(e)[:200]}")
+        await query.edit_message_text(
+            f"❌ Ошибка: {str(e)[:200]}"
+        )
         context.user_data.clear()
         return ConversationHandler.END
 
 async def create_task_finish(update, context):
     try:
+        logger.info(f"Начало create_task_finish с user_data: {context.user_data}")
+
         title = context.user_data.get('task_title')
         desc = context.user_data.get('task_desc')
         task_type = context.user_data.get('task_type')
@@ -1064,11 +1089,13 @@ async def create_task_finish(update, context):
             created_by = update.effective_user.id
         else:
             created_by = update.from_user.id
-
+        
         task_id = await TaskManager.create(
-            title, desc, task_type, target, float(reward),
-            created_by, cat_id, req
-        )
+                    title, desc, task_type, target, float(reward),
+                    created_by, cat_id, req
+                )
+
+        logger.info(f"✅ Задание {task_id} создано")
 
         type_names = {
             'channel': '📢 Канал',
@@ -1166,7 +1193,7 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     logger.info(f"✅ approve_request_callback вызван с data: {query.data}")
     await query.answer()
-
+    
     admin_id = update.effective_user.id
     logger.info(f"Администратор {admin_id} нажал 'Подтвердить'")
 
@@ -1180,28 +1207,33 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("❌ Неверный формат запроса.")
         return
 
+    # Получаем информацию о запросе
     req = await CompletionManager.get_request(request_id)
     if not req:
         await query.edit_message_text("❌ Запрос не найден.")
         return
-
+    
     if req['status'] != 'pending':
         await query.edit_message_text("❌ Запрос уже обработан.")
         return
 
+    # Получаем информацию о задании
     task = await TaskManager.get_by_id(req['task_id'])
     if not task:
         await query.edit_message_text("❌ Задание не найдено.")
         return
 
+    # Подтверждаем запрос через CompletionManager
     success = await CompletionManager.approve_request(request_id, admin_id)
-
+    
     if not success:
         await query.edit_message_text("❌ Не удалось подтвердить запрос.")
         return
 
+    # Добавляем запись в payment_awaiting
     await PaymentAwaitingManager.add(req['user_id'], req['task_id'], request_id)
 
+    # Отправляем пользователю сообщение с запросом данных карты
     try:
         await context.bot.send_message(
             req['user_id'],
@@ -1222,7 +1254,7 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     logger.info(f"❌ reject_request_callback вызван с data: {query.data}")
     await query.answer()
-
+    
     admin_id = update.effective_user.id
     logger.info(f"Администратор {admin_id} нажал 'Отклонить'")
 
@@ -1236,25 +1268,29 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("❌ Неверный формат запроса.")
         return
 
+    # Получаем информацию о запросе
     req = await CompletionManager.get_request(request_id)
     if not req:
         await query.edit_message_text("❌ Запрос не найден.")
         return
-
+    
     if req['status'] != 'pending':
         await query.edit_message_text("❌ Запрос уже обработан.")
         return
 
+    # Получаем информацию о задании
     task = await TaskManager.get_by_id(req['task_id'])
 
+    # Отклоняем запрос
     success = await CompletionManager.reject_request(request_id, admin_id)
-
+    
     if success:
+        # Создаем клавиатуру с кнопкой "Задать вопрос"
         keyboard = [[InlineKeyboardButton("📝 Задать вопрос", callback_data="ask_question")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-
+        
         task_title = task['title'] if task else "задания"
-
+        
         try:
             await context.bot.send_message(
                 req['user_id'],
@@ -1431,6 +1467,7 @@ async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== УДАЛЕНИЕ ЗАДАНИЙ У ПОЛЬЗОВАТЕЛЕЙ ====================
 async def remove_user_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало процесса удаления задания у пользователя"""
     if not await AdminManager.is_main_admin(update.effective_user.id):
         await update.callback_query.answer("⛔ Только главный админ может использовать эту функцию!", show_alert=True)
         return ConversationHandler.END
@@ -1447,6 +1484,7 @@ async def remove_user_task_start(update: Update, context: ContextTypes.DEFAULT_T
     return REMOVE_TASK_USER_ID
 
 async def remove_user_task_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение ID пользователя"""
     if update.message.text == '/cancel':
         await update.message.reply_text("❌ Операция отменена.")
         context.user_data.clear()
@@ -1455,7 +1493,7 @@ async def remove_user_task_user_id(update: Update, context: ContextTypes.DEFAULT
     try:
         user_id = int(update.message.text)
         context.user_data['remove_task_user_id'] = user_id
-
+        
         user = await UserManager.get(user_id)
         if not user:
             await update.message.reply_text(
@@ -1465,7 +1503,7 @@ async def remove_user_task_user_id(update: Update, context: ContextTypes.DEFAULT
             return REMOVE_TASK_USER_ID
 
         tasks = await TaskManager.get_user_tasks(user_id, status='active')
-
+        
         if not tasks:
             await update.message.reply_text(
                 f"📭 У пользователя {user_id} нет активных заданий.\n"
@@ -1475,7 +1513,7 @@ async def remove_user_task_user_id(update: Update, context: ContextTypes.DEFAULT
 
         text = f"👤 <b>Пользователь:</b> {user_id} (@{user['username'] or 'нет'})\n\n"
         text += "📋 <b>Активные задания:</b>\n"
-
+        
         for i, task in enumerate(tasks, 1):
             text += f"{i}. <b>{task['title']}</b> (ID: <code>{task['task_id']}</code>)\n"
             text += f"   💰 Награда: {task['reward']} ₽\n"
@@ -1495,6 +1533,7 @@ async def remove_user_task_user_id(update: Update, context: ContextTypes.DEFAULT
         return REMOVE_TASK_USER_ID
 
 async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение ID задания и его удаление"""
     if update.message.text == '/cancel':
         await update.message.reply_text("❌ Операция отменена.")
         context.user_data.clear()
@@ -1513,7 +1552,7 @@ async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT
             'SELECT * FROM user_tasks WHERE user_id = $1 AND task_id = $2 AND status = $3',
             user_id, task_id, 'active'
         )
-
+        
         if not task:
             await update.message.reply_text(
                 f"❌ Задание {task_id} не найдено у пользователя {user_id} или уже завершено.\n"
@@ -1528,12 +1567,12 @@ async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT
             'DELETE FROM user_tasks WHERE user_id = $1 AND task_id = $2',
             user_id, task_id
         )
-
+        
         await conn.execute(
             'UPDATE tasks SET taken_by = NULL, available = TRUE, active = TRUE WHERE task_id = $1',
             task_id
         )
-
+        
         await conn.execute(
             'DELETE FROM pending_links WHERE task_id = $1',
             task_id
@@ -1563,6 +1602,7 @@ async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT
 
 # ==================== УДАЛЕНИЕ ЗАДАНИЯ (ДЛЯ ВСЕХ АДМИНОВ) ====================
 async def delete_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало процесса удаления задания (полное удаление из БД)"""
     if not await AdminManager.is_admin(update.effective_user.id):
         await update.callback_query.answer("⛔ У вас нет прав администратора!", show_alert=True)
         return ConversationHandler.END
@@ -1579,6 +1619,7 @@ async def delete_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return DELETE_TASK_ID
 
 async def delete_task_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение ID задания и его удаление"""
     if update.message.text == '/cancel':
         await update.message.reply_text("❌ Операция отменена.")
         context.user_data.clear()
@@ -1587,6 +1628,7 @@ async def delete_task_id_received(update: Update, context: ContextTypes.DEFAULT_
     task_id = update.message.text.strip()
     admin_id = update.effective_user.id
 
+    # Проверяем существование задания
     task = await TaskManager.get_by_id(task_id)
     if not task:
         await update.message.reply_text(
@@ -1595,6 +1637,7 @@ async def delete_task_id_received(update: Update, context: ContextTypes.DEFAULT_
         )
         return DELETE_TASK_ID
 
+    # Подтверждение удаления
     keyboard = [
         [
             InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_{task_id}"),
@@ -1610,9 +1653,10 @@ async def delete_task_id_received(update: Update, context: ContextTypes.DEFAULT_
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return ConversationHandler.END
+    return ConversationHandler.END  # Выходим из диалога, дальше обработаем callback
 
 async def confirm_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение удаления задания"""
     query = update.callback_query
     await query.answer()
 
@@ -1620,6 +1664,7 @@ async def confirm_delete_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("❌ Удаление отменено.")
         return
 
+    # data = "confirm_delete_TASK_ID"
     task_id = query.data.split('_')[2]
     admin_id = update.effective_user.id
 
@@ -1632,9 +1677,18 @@ async def confirm_delete_callback(update: Update, context: ContextTypes.DEFAULT_
 # ==================== ПОЛЬЗОВАТЕЛЬСКИЕ ДЕЙСТВИЯ ====================
 async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, category_id: Optional[int]):
     query = update.callback_query
+    logger.info(f"Запрос заданий для категории: {category_id}")
+
     tasks_list = await TaskManager.get_available(category_id)
+    logger.info(f"Получено заданий из БД: {len(tasks_list)}")
 
     if not tasks_list:
+        async with Database._pool.acquire() as conn:
+            all_tasks = await conn.fetch('SELECT task_id, title, available, active, taken_by FROM tasks WHERE category_id = $1 OR ($1 IS NULL AND category_id IS NULL)', category_id)
+            logger.info(f"Всего заданий в категории {category_id}: {len(all_tasks)}")
+            for t in all_tasks:
+                logger.info(f"Задание в БД: {dict(t)}")
+
         await query.edit_message_text(
             "📭 В этой категории пока нет доступных заданий.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К категориям", callback_data="user_tasks")]])
@@ -1686,50 +1740,22 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    # Оборачиваем assign, generate_link, save_pending в одну транзакцию
-    async with Database.transaction() as conn:
-        # Назначаем задание (используем TaskManager.assign, но внутри него уже транзакция, поэтому не дублируем)
-        # Однако TaskManager.assign сам начинает свою транзакцию, поэтому чтобы объединить, лучше вынести логику сюда.
-        # Чтобы избежать вложенных транзакций, используем прямой код.
-        task_lock = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1 FOR UPDATE', task_id)
-        if not task_lock or task_lock['taken_by'] or not task_lock['available']:
-            await query.edit_message_text(
-                "❌ Не удалось взять задание. Попробуйте позже.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"take_{task_id}")]])
-            )
-            return
-
-        await conn.execute(
-            'UPDATE tasks SET taken_by = $2, available = FALSE, assigned_date = NOW() WHERE task_id = $1',
-            task_id, user_id
+    success = await TaskManager.assign(task_id, user_id)
+    if not success:
+        await query.edit_message_text(
+            "❌ Не удалось взять задание. Попробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"take_{task_id}")]])
         )
-        await conn.execute(
-            'INSERT INTO user_tasks (user_id, task_id) VALUES ($1, $2)',
-            user_id, task_id
-        )
+        return
 
-        # Генерируем ссылку (вставляем в tracking_links)
-        link_id = secrets.token_urlsafe(8)
-        await conn.execute(
-            'INSERT INTO tracking_links (link_id, user_id, task_id) VALUES ($1, $2, $3)',
-            link_id, user_id, task_id
-        )
+    tracking_link = await TrackingManager.generate_link(user_id, task_id)
+    await PendingManager.save(
+        task_id, user_id,
+        user.get('username', ''),
+        task['title'],
+        tracking_link
+    )
 
-        # Сохраняем в pending_links
-        tracking_link = f"https://t.me/{BOT_USERNAME}?start={link_id}"
-        await conn.execute('''
-            INSERT INTO pending_links (task_id, user_id, username, task_title, tracking_link)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (task_id) DO UPDATE SET
-                user_id = EXCLUDED.user_id,
-                username = EXCLUDED.username,
-                task_title = EXCLUDED.task_title,
-                message_sent = NOW(),
-                tracking_link = EXCLUDED.tracking_link,
-                processed = FALSE
-        ''', task_id, user_id, user.get('username', ''), task['title'], tracking_link)
-
-    # Отправка уведомлений вне транзакции
     admin_msg = (
         f"🆕 <b>НОВОЕ ЗАДАНИЕ ВЗЯТО!</b>\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1888,18 +1914,14 @@ async def broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success = 0
     failed = 0
 
-    BATCH_SIZE = 10
-    for i in range(0, len(user_ids), BATCH_SIZE):
-        batch = user_ids[i:i+BATCH_SIZE]
-        tasks = [context.bot.send_message(uid, text, parse_mode=ParseMode.HTML) for uid in batch]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for r in results:
-            if isinstance(r, Exception):
-                failed += 1
-                logger.error(f"Ошибка отправки: {r}")
-            else:
-                success += 1
-        await asyncio.sleep(1)  # пауза между пачками для соблюдения лимитов
+    for uid in user_ids:
+        try:
+            await context.bot.send_message(uid, text, parse_mode=ParseMode.HTML)
+            success += 1
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение пользователю {uid}: {e}")
+            failed += 1
 
     await update.message.reply_text(
         f"✅ Рассылка завершена!\n"
@@ -1912,11 +1934,11 @@ async def broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
-
+    
     if data.startswith(('approve_', 'reject_', 'complete_', 'answer_user_', 'confirm_delete_')):
         logger.info(f"Пропускаем через main_button_handler: {data}")
-        return
-
+        return  # Пусть обрабатывается более конкретными обработчиками
+    
     await query.answer()
     logger.info(f"Главный обработчик: нажата кнопка {data}")
 
@@ -1943,7 +1965,7 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not await AdminManager.is_admin(update.effective_user.id):
             await query.answer("⛔ У вас нет прав администратора!", show_alert=True)
             return
-
+        
         if data == "admin_panel":
             await admin_panel(update, context)
         elif data == "admin_tasks_menu":
@@ -1976,9 +1998,10 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await delete_task_start(update, context)
 
 async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перехватывает сообщения (текст или фото) от пользователей, ожидающих отправки данных карты."""
     user_id = update.effective_user.id
     logger.info(f"Получено сообщение от пользователя {user_id} в ожидании данных карты")
-
+    
     awaiting = await PaymentAwaitingManager.get_by_user(user_id)
     if not awaiting:
         logger.info(f"Пользователь {user_id} не в ожидании данных карты, игнорируем")
@@ -1986,7 +2009,7 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     task_id = awaiting['task_id']
     request_id = awaiting['request_id']
-
+    
     logger.info(f"Пользователь {user_id} ожидает отправки данных для задания {task_id}, запрос {request_id}")
 
     task = await TaskManager.get_by_id(task_id)
@@ -1997,7 +2020,7 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     try:
         logger.info(f"Попытка пересылки сообщения {update.message.message_id} в группу {GROUP_ID}, топик {REPORT_TOPIC}")
-
+        
         forwarded = await context.bot.forward_message(
             chat_id=GROUP_ID,
             from_chat_id=update.effective_chat.id,
@@ -2005,7 +2028,7 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             message_thread_id=REPORT_TOPIC
         )
         logger.info(f"✅ Сообщение переслано, ID пересланного: {forwarded.message_id}")
-
+        
         info_text = (
             f"📌 <b>Данные карты для задания</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -2020,7 +2043,7 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"  • Запрос ID: {request_id}\n"
             f"━━━━━━━━━━━━━━━━━━━━━"
         )
-
+        
         await context.bot.send_message(
             chat_id=GROUP_ID,
             text=info_text,
@@ -2028,11 +2051,12 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             message_thread_id=REPORT_TOPIC
         )
         logger.info("✅ Информация о задании отправлена в группу отчётов")
-
+        
     except Exception as e:
         logger.error(f"❌ Ошибка при пересылке в группу отчётов: {e}")
         logger.exception("Полный стек ошибки:")
-
+        
+        # Отправка администраторам в ЛС как запасной вариант
         admins = await AdminManager.get_all_admins()
         sent = False
         for admin in admins:
@@ -2055,7 +2079,7 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 break
             except Exception as e2:
                 logger.error(f"Не удалось отправить администратору {admin['user_id']}: {e2}")
-
+        
         if not sent:
             await update.message.reply_text(
                 "❌ Не удалось отправить данные в группу отчётов. "
@@ -2063,15 +2087,17 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
 
-    # Завершаем задание
+    # ЗАВЕРШАЕМ ЗАДАНИЕ ПОСЛЕ ПОЛУЧЕНИЯ ДАННЫХ КАРТЫ
     logger.info(f"Попытка завершения задания {task_id} для пользователя {user_id}")
-
+    
+    # Используем транзакцию для завершения задания
     async with Database.transaction() as conn:
+        # Проверяем, не завершено ли уже задание
         task_check = await conn.fetchrow(
             'SELECT completed FROM tasks WHERE task_id = $1',
             task_id
         )
-
+        
         if task_check and task_check['completed']:
             logger.info(f"Задание {task_id} уже завершено")
             await update.message.reply_text(
@@ -2079,7 +2105,8 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             await PaymentAwaitingManager.mark_completed(awaiting['id'])
             return
-
+        
+        # Завершаем задание
         await conn.execute('''
             UPDATE tasks 
             SET completed = TRUE, 
@@ -2088,7 +2115,8 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 proof = $2
             WHERE task_id = $1
         ''', task_id, "payment_data_sent")
-
+        
+        # Обновляем user_tasks
         await conn.execute('''
             UPDATE user_tasks 
             SET status = 'completed', 
@@ -2096,14 +2124,16 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 earned = $2
             WHERE user_id = $3 AND task_id = $1
         ''', task_id, task['reward'], user_id)
-
+        
+        # Обновляем пользователя
         await conn.execute('''
             UPDATE users 
             SET total_earned = total_earned + $2, 
                 completed_tasks = completed_tasks + 1 
             WHERE user_id = $1
         ''', user_id, task['reward'])
-
+        
+        # Обновляем статистику
         await conn.execute('''
             INSERT INTO stats (date, tasks_completed, total_payout) 
             VALUES (CURRENT_DATE, 1, $1)
@@ -2111,16 +2141,16 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 tasks_completed = stats.tasks_completed + 1,
                 total_payout = stats.total_payout + $1
         ''', task['reward'])
-
+    
     logger.info(f"✅ Задание {task_id} успешно завершено для пользователя {user_id}")
 
+    # Отмечаем запись в payment_awaiting как выполненную
     await PaymentAwaitingManager.mark_completed(awaiting['id'])
 
     await update.message.reply_text(
         "✅ Спасибо! Ваши данные получены. Задание успешно завершено, награда зачислена.\n"
         "Вы можете проверить свой профиль командой /profile."
     )
-
 # ==================== КОМАНДЫ ====================
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_main_admin(update.effective_user.id):
@@ -2182,19 +2212,22 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Message text: {update.message.text}")
 
 async def check_bot_permissions(application: Application):
+    """Проверяет права бота в группе"""
     try:
         chat = await application.bot.get_chat(GROUP_ID)
         logger.info(f"✅ Группа найдена: {chat.title} (ID: {chat.id})")
-
+        
         bot_member = await chat.get_member(application.bot.id)
         logger.info(f"🤖 Статус бота в группе: {bot_member.status}")
-
+        
         if bot_member.status not in ['administrator', 'creator']:
             logger.warning("⚠️ Бот не является администратором группы! Некоторые функции могут не работать.")
         else:
             logger.info("✅ Бот является администратором группы")
-
+            
+        # Проверяем доступ к темам
         try:
+            # Пробуем отправить тестовое сообщение в тему
             await application.bot.send_message(
                 chat_id=GROUP_ID,
                 text="✅ Бот успешно подключен к группе и темам!",
@@ -2203,13 +2236,13 @@ async def check_bot_permissions(application: Application):
             logger.info("✅ Бот имеет доступ к темам")
         except Exception as e:
             logger.error(f"❌ Бот не имеет доступа к темам: {e}")
-
+            
     except Exception as e:
         logger.error(f"❌ Не удалось получить информацию о группе: {e}")
 
 async def post_init(application: Application):
     await Database.init_pool()
-    await check_bot_permissions(application)
+    await check_bot_permissions(application)  # Добавьте эту строку
     logger.info("✅ Бот запущен и готов к работе!")
     logger.info(f"👑 Главный администратор: {MAIN_ADMIN_ID}")
     logger.info(f"📢 Группа ID: {GROUP_ID}")
@@ -2228,13 +2261,22 @@ def main():
     application.post_shutdown = shutdown
 
     # ========== 1. СНАЧАЛА САМЫЕ КОНКРЕТНЫЕ ОБРАБОТЧИКИ ==========
+    # Обработчики для кнопок подтверждения/отклонения (самые приоритетные)
     application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_\\d+$"))
     application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_\\d+$"))
+    
+    # Обработчик для кнопки "Я выполнил задание"
     application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
+    
+    # Обработчик для ответа пользователю
     application.add_handler(CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$"))
+
+    # Обработчик подтверждения удаления задания
     application.add_handler(CallbackQueryHandler(confirm_delete_callback, pattern="^(confirm_delete_|cancel_delete)$"))
 
-    # ========== 2. ДИАЛОГИ ==========
+    # ========== 2. ПОТОМ ДИАЛОГИ ==========
+    
+    # Диалог для вопросов от пользователей
     ask_question_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_question_start, pattern="^ask_question$")],
         states={
@@ -2247,6 +2289,7 @@ def main():
     )
     application.add_handler(ask_question_conv)
 
+    # Диалог для ответов администратора
     admin_reply_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$")],
         states={
@@ -2259,6 +2302,7 @@ def main():
     )
     application.add_handler(admin_reply_conv)
 
+    # Диалог рассылки
     broadcast_conv = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_start)],
         states={
@@ -2270,6 +2314,7 @@ def main():
     )
     application.add_handler(broadcast_conv)
 
+    # Диалог удаления задания у пользователя
     remove_task_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(remove_user_task_start, pattern="^admin_remove_user_task_start$")],
         states={
@@ -2282,6 +2327,7 @@ def main():
     )
     application.add_handler(remove_task_conv)
 
+    # Диалог удаления задания (полное удаление)
     delete_task_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(delete_task_start, pattern="^admin_delete_task_start$")],
         states={
@@ -2293,6 +2339,7 @@ def main():
     )
     application.add_handler(delete_task_conv)
 
+    # Диалог добавления администратора
     conv_add_admin = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_admin_start, pattern="^admin_add_admin_start$")],
         states={
@@ -2305,6 +2352,7 @@ def main():
     )
     application.add_handler(conv_add_admin)
 
+    # Диалог добавления категории
     conv_add_category = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_category_start, pattern="^admin_add_category$")],
         states={
@@ -2317,6 +2365,7 @@ def main():
     )
     application.add_handler(conv_add_category)
 
+    # Диалог создания задания
     conv_create_task = ConversationHandler(
         entry_points=[
             CommandHandler("create_task", create_task_start),
@@ -2337,7 +2386,7 @@ def main():
     )
     application.add_handler(conv_create_task)
 
-    # ========== 3. КОМАНДЫ ==========
+    # ========== 3. ПОТОМ КОМАНДЫ ==========
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("profile", profile))
@@ -2353,10 +2402,10 @@ def main():
     application.add_handler(CommandHandler("users_list", users_list_command))
     application.add_handler(CommandHandler("check_admin", check_admin_command))
 
-    # ========== 4. ОБЩИЙ ОБРАБОТЧИК КНОПОК (НИЗКИЙ ПРИОРИТЕТ) ==========
+    # ========== 4. ПОТОМ ОБЩИЙ ОБРАБОТЧИК КНОПОК (САМЫЙ НИЗКИЙ ПРИОРИТЕТ) ==========
     application.add_handler(CallbackQueryHandler(main_button_handler))
 
-    # ========== 5. ОБРАБОТЧИКИ СООБЩЕНИЙ ==========
+    # ========== 5. ПОТОМ ОБРАБОТЧИКИ СООБЩЕНИЙ ==========
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_payment_data))
     application.add_handler(MessageHandler(filters.PHOTO, handle_payment_data))
 
