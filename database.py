@@ -240,10 +240,12 @@ class AdminManager:
 
     @staticmethod
     async def is_admin(user_id: int) -> bool:
+        # Главный админ всегда админ
         if user_id == AdminManager.MAIN_ADMIN_ID:
             return True
         async with Database._pool.acquire() as conn:
             val = await conn.fetchval('SELECT is_admin FROM users WHERE user_id = $1', user_id)
+            # Явно преобразуем в bool и проверяем на None
             return bool(val) if val is not None else False
 
     @staticmethod
@@ -253,11 +255,21 @@ class AdminManager:
     @staticmethod
     async def add_admin(user_id: int, username: str = "", added_by: int = None) -> bool:
         async with Database.transaction() as conn:
+            # Сначала убедимся, что пользователь существует
             await UserManager.get_or_create(user_id, username, "")
-            await conn.execute(
+            
+            # Обновляем флаг is_admin
+            result = await conn.execute(
                 'UPDATE users SET is_admin = TRUE, added_by = $2 WHERE user_id = $1',
                 user_id, added_by or AdminManager.MAIN_ADMIN_ID
             )
+            
+            # Проверим, что обновление прошло успешно
+            if result == "UPDATE 0":
+                logger.error(f"Не удалось обновить пользователя {user_id}")
+                return False
+                
+            logger.info(f"Администратор {user_id} успешно добавлен")
             return True
 
     @staticmethod
@@ -274,6 +286,7 @@ class AdminManager:
             rows = await conn.fetch('''
                 SELECT * FROM users 
                 WHERE is_admin = TRUE OR user_id = $1
+                ORDER BY user_id
             ''', AdminManager.MAIN_ADMIN_ID)
             return [dict(r) for r in rows]
 
