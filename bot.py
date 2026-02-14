@@ -47,6 +47,7 @@ ADD_ADMIN_ID, ADD_ADMIN_USERNAME = range(14, 16)
 BROADCAST_TEXT = 50
 ASK_QUESTION = 51
 REMOVE_TASK_USER_ID, REMOVE_TASK_TASK_ID = range(52, 54)
+DELETE_TASK_ID = 55  # новое состояние для удаления задания
 
 # ==================== ОБЩИЕ КОМАНДЫ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,7 +298,7 @@ async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode=ParseMode.HTML
     )
     
-    return ASK_QUESTION  # Важно вернуть состояние!
+    return ASK_QUESTION
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ответа администратора пользователю"""
@@ -377,6 +378,9 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_main:
         keyboard.append([InlineKeyboardButton("👥 Управление админами", callback_data="admin_manage_admins")])
         keyboard.append([InlineKeyboardButton("🗑 Удаление заданий у пользователей", callback_data="admin_remove_user_task_start")])
+    
+    # Добавляем кнопку удаления задания для всех админов
+    keyboard.append([InlineKeyboardButton("❌ Удалить задание", callback_data="admin_delete_task_start")])
 
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_main")])
 
@@ -1116,7 +1120,6 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
         if ut['status'] == 'completed':
             await query.edit_message_text("✅ Это задание уже выполнено и подтверждено.")
             return
-        # Добавим проверку на ожидание оплаты
         if ut['status'] == 'awaiting_payment':
             await query.edit_message_text("⏳ Задание ожидает подтверждения оплаты.")
             return
@@ -1275,6 +1278,7 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(f"❌ Запрос #{request_id} отклонён. Пользователь уведомлён.")
     else:
         await query.edit_message_text("❌ Не удалось отклонить запрос.")
+
 async def pending_completions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Только для администраторов.")
@@ -1567,6 +1571,80 @@ async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT
     context.user_data.clear()
     return ConversationHandler.END
 
+# ==================== УДАЛЕНИЕ ЗАДАНИЯ (ДЛЯ ВСЕХ АДМИНОВ) ====================
+async def delete_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало процесса удаления задания (полное удаление из БД)"""
+    if not await AdminManager.is_admin(update.effective_user.id):
+        await update.callback_query.answer("⛔ У вас нет прав администратора!", show_alert=True)
+        return ConversationHandler.END
+
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "❌ <b>Удаление задания</b>\n\n"
+        "Введите ID задания, которое нужно полностью удалить из системы:\n"
+        "(например: 8ff025ef)\n\n"
+        "Или отправьте /cancel для отмены.",
+        parse_mode=ParseMode.HTML
+    )
+    return DELETE_TASK_ID
+
+async def delete_task_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение ID задания и его удаление"""
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Операция отменена.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    task_id = update.message.text.strip()
+    admin_id = update.effective_user.id
+
+    # Проверяем существование задания
+    task = await TaskManager.get_by_id(task_id)
+    if not task:
+        await update.message.reply_text(
+            f"❌ Задание с ID {task_id} не найдено.\n"
+            f"Введите другой ID или /cancel для отмены:"
+        )
+        return DELETE_TASK_ID
+
+    # Подтверждение удаления
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_{task_id}"),
+            InlineKeyboardButton("❌ Нет, отмена", callback_data="cancel_delete")
+        ]
+    ]
+    await update.message.reply_text(
+        f"⚠️ <b>Вы действительно хотите полностью удалить задание?</b>\n\n"
+        f"📋 Название: {task['title']}\n"
+        f"🆔 ID: {task_id}\n"
+        f"💰 Награда: {task['reward']} ₽\n\n"
+        f"Все связанные данные (взятия, запросы, ссылки) будут безвозвратно удалены.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ConversationHandler.END  # Выходим из диалога, дальше обработаем callback
+
+async def confirm_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение удаления задания"""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "cancel_delete":
+        await query.edit_message_text("❌ Удаление отменено.")
+        return
+
+    # data = "confirm_delete_TASK_ID"
+    task_id = query.data.split('_')[2]
+    admin_id = update.effective_user.id
+
+    success = await TaskManager.delete_task(task_id, admin_id)
+    if success:
+        await query.edit_message_text(f"✅ Задание {task_id} успешно удалено.")
+    else:
+        await query.edit_message_text(f"❌ Не удалось удалить задание {task_id}.")
+
 # ==================== ПОЛЬЗОВАТЕЛЬСКИЕ ДЕЙСТВИЯ ====================
 async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, category_id: Optional[int]):
     query = update.callback_query
@@ -1828,13 +1906,12 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     data = query.data
     
-    if data.startswith(('approve_', 'reject_', 'complete_')):
+    if data.startswith(('approve_', 'reject_', 'complete_', 'answer_user_', 'confirm_delete_')):
         logger.info(f"Пропускаем через main_button_handler: {data}")
         return  # Пусть обрабатывается более конкретными обработчиками
     
     await query.answer()
     logger.info(f"Главный обработчик: нажата кнопка {data}")
- 
 
     if data == "back_main":
         await start(update, context)
@@ -1888,6 +1965,8 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await create_task_start(update, context)
         elif data == "admin_remove_user_task_start":
             await remove_user_task_start(update, context)
+        elif data == "admin_delete_task_start":
+            await delete_task_start(update, context)
 
 async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Перехватывает сообщения (текст или фото) от пользователей, ожидающих отправки данных карты."""
@@ -2134,6 +2213,9 @@ def main():
     # Обработчик для ответа пользователю
     application.add_handler(CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$"))
 
+    # Обработчик подтверждения удаления задания
+    application.add_handler(CallbackQueryHandler(confirm_delete_callback, pattern="^(confirm_delete_|cancel_delete)$"))
+
     # ========== 2. ПОТОМ ДИАЛОГИ ==========
     
     # Диалог для вопросов от пользователей
@@ -2145,7 +2227,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
         name="ask_question_conv",
         allow_reentry=True,
-        persistent=False  # Добавляем для надежности
+        persistent=False
     )
     application.add_handler(ask_question_conv)
 
@@ -2186,6 +2268,18 @@ def main():
         persistent=False
     )
     application.add_handler(remove_task_conv)
+
+    # Диалог удаления задания (полное удаление)
+    delete_task_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(delete_task_start, pattern="^admin_delete_task_start$")],
+        states={
+            DELETE_TASK_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_task_id_received)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        name="delete_task_conv",
+        persistent=False
+    )
+    application.add_handler(delete_task_conv)
 
     # Диалог добавления администратора
     conv_add_admin = ConversationHandler(
@@ -2251,7 +2345,6 @@ def main():
     application.add_handler(CommandHandler("check_admin", check_admin_command))
 
     # ========== 4. ПОТОМ ОБЩИЙ ОБРАБОТЧИК КНОПОК (САМЫЙ НИЗКИЙ ПРИОРИТЕТ) ==========
-    # Важно: этот обработчик должен перехватывать ВСЕ остальные callback'и
     application.add_handler(CallbackQueryHandler(main_button_handler))
 
     # ========== 5. ПОТОМ ОБРАБОТЧИКИ СООБЩЕНИЙ ==========
@@ -2263,7 +2356,6 @@ def main():
 
     logger.info("🚀 Запуск бота...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
