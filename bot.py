@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 from dotenv import load_dotenv
-
+from telegram.error import BadRequest
 load_dotenv()
 
 from database import (
@@ -1383,6 +1383,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ОШИБКИ ====================
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Игнорируем ошибку "Message is not modified" (повторное нажатие на одну кнопку)
+    if isinstance(context.error, BadRequest) and "Message is not modified" in str(context.error):
+        logger.info(f"Ignored 'Message is not modified' error: {context.error}")
+        return
+
     logger.error(f"❌ Произошла ошибка: {context.error}")
     import traceback
     tb = traceback.format_exception(None, context.error, context.error.__traceback__)
