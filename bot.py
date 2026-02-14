@@ -1,9 +1,9 @@
-# bot.py (полная версия с поддержкой частичного взятия заданий)
+# bot.py (полный код с исправленной логикой взятия заданий)
 import os
 import logging
 import asyncio
 import urllib.parse
-import json  # добавлен импорт
+import json
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
@@ -26,14 +26,14 @@ WELCOME_VIDEO_PATH = os.path.join(os.path.dirname(__file__), "video.mp4")
 # ==================== НАСТРОЙКИ ====================
 TOKEN = os.environ.get('BOT_TOKEN')
 MAIN_ADMIN_ID = int(os.environ.get('MAIN_ADMIN_ID', '8358009538'))
-GROUP_ID = int(os.environ.get('GROUP_ID', '-1003768763215'))  # ID группы с префиксом -100
+GROUP_ID = int(os.environ.get('GROUP_ID', '-1003768763215'))
 BOT_USERNAME = os.environ.get('BOT_USERNAME', 'TrafficWorkeee_bot')
 
-# ID тем (топиков) в группе - замените на свои значения
-TOPIC_LINKS = 25      # для сообщений "ждут ссылку"
-TOPIC_QUESTIONS = 27  # для вопросов пользователей
-TOPIC_COMPLETED = 29  # для подтверждения выполненных заданий
-REPORT_TOPIC = 45     # для отчётов по выплатам
+# ID тем (топиков) в группе
+TOPIC_LINKS = 25
+TOPIC_QUESTIONS = 27
+TOPIC_COMPLETED = 29
+REPORT_TOPIC = 45
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -49,7 +49,7 @@ BROADCAST_TEXT = 50
 ASK_QUESTION = 51
 REMOVE_TASK_USER_ID, REMOVE_TASK_TASK_ID = range(52, 54)
 DELETE_TASK_ID = 55
-TASK_MULTI_DATA = 100  # новое состояние
+TASK_MULTI_DATA = 100
 
 # ==================== ОБЩИЕ КОМАНДЫ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,26 +70,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Ссылка недействительна.")
         return
+    
     welcome_text = (
-    "🚀 Зарабатывай на белом трафике!\n\n"
-    "Наш бот — личный кабинет с ежедневными заданиями по привлечению трафика в Telegram 📲 "
-    "Без серых схем и накруток — только живые люди и честные выплаты 💎\n\n"
-    "Как это работает? 👇\n"
-    "✅ Выбираешь задание\n"
-    "✅ Приводишь целевой трафик\n"
-    "✅ Получаешь оплату 💰\n\n"
-    "Всё автоматически: результат фиксируется, деньги начисляются на баланс 📊 "
-    "Ты сам решаешь, сколько зарабатывать.\n\n"
-    "Почему мы? ⚡️\n"
-    "✨ Стабильные выплаты\n"
-    "✨ Прозрачные условия\n"
-    "✨ Поддержка 24/7\n"
-    "✨ Постоянный поток заказов\n\n"
-    "Готов начать? 🚀\n"
-    "Переходи в канал с мануалом и поддержкой кураторов:\n"
-    "https://t.me/Trafficork"
-)
-
+        "🚀 Зарабатывай на белом трафике!\n\n"
+        "Наш бот — личный кабинет с ежедневными заданиями по привлечению трафика в Telegram 📲 "
+        "Без серых схем и накруток — только живые люди и честные выплаты 💎\n\n"
+        "Как это работает? 👇\n"
+        "✅ Выбираешь задание\n"
+        "✅ Приводишь целевой трафик\n"
+        "✅ Получаешь оплату 💰\n\n"
+        "Всё автоматически: результат фиксируется, деньги начисляются на баланс 📊 "
+        "Ты сам решаешь, сколько зарабатывать.\n\n"
+        "Почему мы? ⚡️\n"
+        "✨ Стабильные выплаты\n"
+        "✨ Прозрачные условия\n"
+        "✨ Поддержка 24/7\n"
+        "✨ Постоянный поток заказов\n\n"
+        "Готов начать? 🚀\n"
+        "Переходи в канал с мануалом и поддержкой кураторов:\n"
+        "https://t.me/Trafficork"
+    )
 
     keyboard = [
         [InlineKeyboardButton("📋 Доступные задания", callback_data="user_tasks")],
@@ -141,7 +141,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 <b>/my_tasks</b> — взятые задания\n\n"
         "📌 <b>Как работать?</b>\n"
         "1. Выбери задание из списка\n"
-        "2. Нажми «Взять» — бот создаст твою личную ссылку\n"
+        "2. Нажми «Взять» — если задание можно брать частями, выбери объём\n"
         "3. Администратор выдаст рабочую ссылку\n"
         "4. Приводи людей по своей ссылке и зарабатывай\n\n"
     )
@@ -210,12 +210,15 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for task in tasks_list:
         status_emoji = "✅" if task.get('completed', False) else "⏳"
         reward = task.get('reward', 0)
-        taken_quantity = task.get('taken_quantity', 1)  # добавлено
+        taken_quantity = task.get('taken_quantity', 1)
+        price_per_unit = task.get('price_per_unit', reward)
+        total_price = taken_quantity * price_per_unit
+        
         text = (
             f"{status_emoji} <b>{task['title']}</b>\n"
             f"ID: <code>{task['task_id']}</code>\n"
-            f"💰 Награда: {reward} ₽\n"
             f"📊 Взято единиц: {taken_quantity}\n"
+            f"💰 Стоимость: {total_price} ₽\n"
             f"Статус: {'Выполнено' if task.get('completed', False) else 'В работе'}\n"
         )
         if task.get('earned'):
@@ -230,7 +233,6 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ОБРАБОТЧИК ВОПРОСОВ ====================
 async def ask_question_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало диалога вопроса"""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
@@ -242,7 +244,6 @@ async def ask_question_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ASK_QUESTION
 
 async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение текста вопроса и отправка в тему 'вопросы' с кнопкой ответа"""
     if update.message.text == '/cancel':
         await update.message.reply_text("❌ Вопрос отменён.")
         return ConversationHandler.END
@@ -266,7 +267,6 @@ async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        # Отправляем в тему вопросов
         sent_message = await context.bot.send_message(
             chat_id=GROUP_ID,
             text=text,
@@ -275,7 +275,6 @@ async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_thread_id=TOPIC_QUESTIONS
         )
         
-        # Сохраняем ID сообщения и темы для возможного ответа
         context.user_data['last_question_message_id'] = sent_message.message_id
         context.user_data['last_question_thread_id'] = TOPIC_QUESTIONS
         
@@ -288,7 +287,6 @@ async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатия на кнопку 'Ответить пользователю'"""
     query = update.callback_query
     await query.answer()
     
@@ -303,8 +301,6 @@ async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
 
     context.user_data['reply_to_user'] = user_id
-    
-    # Сохраняем информацию о том, откуда пришел запрос (ID сообщения и темы)
     context.user_data['reply_message_id'] = query.message.message_id
     context.user_data['reply_thread_id'] = query.message.message_thread_id
     
@@ -318,7 +314,6 @@ async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     return ASK_QUESTION
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик ответа администратора пользователю"""
     if 'reply_to_user' not in context.user_data:
         return ConversationHandler.END
 
@@ -332,7 +327,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     admin = update.effective_user
 
     try:
-        # Отправляем ответ пользователю
         await context.bot.send_message(
             user_id,
             f"📝 <b>Ответ от администратора</b>\n\n{reply_text}",
@@ -343,10 +337,8 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"✅ Ответ отправлен пользователю {user_id}."
         )
         
-        # Отправляем подтверждение в группу - ВАЖНО: проверяем, что сообщение пришло из темы
         thread_id = update.message.message_thread_id if update.message else None
         
-        # Если сообщение пришло из темы, отправляем ответ в ту же тему
         if thread_id:
             await context.bot.send_message(
                 chat_id=GROUP_ID,
@@ -357,10 +349,9 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     f"📝 Ответ: {reply_text}"
                 ),
                 parse_mode=ParseMode.HTML,
-                message_thread_id=thread_id  # Используем ID темы, из которой пришел ответ
+                message_thread_id=thread_id
             )
         else:
-            # Если нет thread_id, отправляем в общий чат
             await context.bot.send_message(
                 chat_id=GROUP_ID,
                 text=(
@@ -412,9 +403,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("👥 Управление админами", callback_data="admin_manage_admins")])
         keyboard.append([InlineKeyboardButton("🗑 Удаление заданий у пользователей", callback_data="admin_remove_user_task_start")])
     
-    # Добавляем кнопку удаления задания для всех админов
     keyboard.append([InlineKeyboardButton("❌ Удалить задание", callback_data="admin_delete_task_start")])
-
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_main")])
 
     text = "👑 <b>АДМИН-ПАНЕЛЬ</b>\n\nВыберите действие:"
@@ -969,7 +958,6 @@ async def create_task_reward(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     return REQUIREMENTS
 
-# Обновлённая функция create_task_requirements
 async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.message.text == '/cancel':
@@ -980,7 +968,6 @@ async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT
         req = update.message.text
         context.user_data['requirements'] = req if req.lower() != 'нет' else ""
 
-        # Запрашиваем информацию о многочастности
         await update.message.reply_text(
             "📦 <b>Многочастное задание?</b>\n\n"
             "Если задание можно брать частями, введите данные в формате:\n"
@@ -1002,7 +989,6 @@ async def create_task_requirements(update: Update, context: ContextTypes.DEFAULT
         context.user_data.clear()
         return ConversationHandler.END
 
-# Новый обработчик для ввода данных многочастного задания
 async def create_task_multi_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == '/cancel':
         await update.message.reply_text("❌ Создание задания отменено.")
@@ -1011,7 +997,6 @@ async def create_task_multi_data(update: Update, context: ContextTypes.DEFAULT_T
 
     text = update.message.text.strip()
     if text == '-':
-        # Простое задание
         context.user_data['total_quantity'] = 1
         context.user_data['price_per_unit'] = context.user_data.get('reward')
         context.user_data['available_quantities'] = None
@@ -1035,13 +1020,11 @@ async def create_task_multi_data(update: Update, context: ContextTypes.DEFAULT_T
             context.user_data['total_quantity'] = total_q
             context.user_data['price_per_unit'] = price_per_unit
             context.user_data['available_quantities'] = quantities
-            # Обновляем reward для совместимости (полная стоимость)
             context.user_data['reward'] = total_q * price_per_unit
         except:
             await update.message.reply_text("❌ Ошибка в числах. Попробуйте снова.")
             return TASK_MULTI_DATA
 
-    # Переходим к выбору категории
     cats = await CategoryManager.get_all()
     if not cats:
         context.user_data['category_id'] = None
@@ -1210,13 +1193,16 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
     request_id = await CompletionManager.create_request(task_id, user_id)
 
     user = await UserManager.get(user_id)
+    taken_quantity = ut['taken_quantity']
+    total_price = taken_quantity * task['price_per_unit']
+    
     text = (
         f"🔔 <b>Запрос на подтверждение выполнения</b>\n\n"
         f"👤 Пользователь: @{user['username'] or 'нет'} (ID: {user_id})\n"
         f"📋 Задание: {task['title']}\n"
         f"🆔 ID задания: <code>{task_id}</code>\n"
-        f"💰 Награда: {task['reward']} ₽\n"
-        f"📊 Взято единиц: {ut['taken_quantity']}\n"  # добавлено
+        f"📊 Взято единиц: {taken_quantity}\n"
+        f"💰 Стоимость: {total_price} ₽\n"
         f"Подтвердите или отклоните выполнение:"
     )
     keyboard = [
@@ -1262,7 +1248,6 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("❌ Неверный формат запроса.")
         return
 
-    # Получаем информацию о запросе
     req = await CompletionManager.get_request(request_id)
     if not req:
         await query.edit_message_text("❌ Запрос не найден.")
@@ -1272,23 +1257,19 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("❌ Запрос уже обработан.")
         return
 
-    # Получаем информацию о задании
     task = await TaskManager.get_by_id(req['task_id'])
     if not task:
         await query.edit_message_text("❌ Задание не найдено.")
         return
 
-    # Подтверждаем запрос через CompletionManager
     success = await CompletionManager.approve_request(request_id, admin_id)
     
     if not success:
         await query.edit_message_text("❌ Не удалось подтвердить запрос.")
         return
 
-    # Добавляем запись в payment_awaiting
     await PaymentAwaitingManager.add(req['user_id'], req['task_id'], request_id)
 
-    # Отправляем пользователю сообщение с запросом данных карты
     try:
         await context.bot.send_message(
             req['user_id'],
@@ -1323,7 +1304,6 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("❌ Неверный формат запроса.")
         return
 
-    # Получаем информацию о запросе
     req = await CompletionManager.get_request(request_id)
     if not req:
         await query.edit_message_text("❌ Запрос не найден.")
@@ -1333,14 +1313,11 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("❌ Запрос уже обработан.")
         return
 
-    # Получаем информацию о задании
     task = await TaskManager.get_by_id(req['task_id'])
 
-    # Отклоняем запрос
     success = await CompletionManager.reject_request(request_id, admin_id)
     
     if success:
-        # Создаем клавиатуру с кнопкой "Задать вопрос"
         keyboard = [[InlineKeyboardButton("📝 Задать вопрос", callback_data="ask_question")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1522,7 +1499,6 @@ async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== УДАЛЕНИЕ ЗАДАНИЙ У ПОЛЬЗОВАТЕЛЕЙ ====================
 async def remove_user_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало процесса удаления задания у пользователя"""
     if not await AdminManager.is_main_admin(update.effective_user.id):
         await update.callback_query.answer("⛔ Только главный админ может использовать эту функцию!", show_alert=True)
         return ConversationHandler.END
@@ -1539,7 +1515,6 @@ async def remove_user_task_start(update: Update, context: ContextTypes.DEFAULT_T
     return REMOVE_TASK_USER_ID
 
 async def remove_user_task_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение ID пользователя"""
     if update.message.text == '/cancel':
         await update.message.reply_text("❌ Операция отменена.")
         context.user_data.clear()
@@ -1589,7 +1564,6 @@ async def remove_user_task_user_id(update: Update, context: ContextTypes.DEFAULT
         return REMOVE_TASK_USER_ID
 
 async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение ID задания и его удаление"""
     if update.message.text == '/cancel':
         await update.message.reply_text("❌ Операция отменена.")
         context.user_data.clear()
@@ -1620,19 +1594,16 @@ async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT
         taken_quantity = task['taken_quantity']
 
     async with Database.transaction() as conn:
-        # Удаляем из user_tasks
         await conn.execute(
             'DELETE FROM user_tasks WHERE user_id = $1 AND task_id = $2',
             user_id, task_id
         )
         
-        # Возвращаем количество обратно в задание
         await conn.execute(
             'UPDATE tasks SET remaining_quantity = remaining_quantity + $1 WHERE task_id = $2',
             taken_quantity, task_id
         )
         
-        # Если задание стало снова доступно, обновляем флаги
         await conn.execute(
             'UPDATE tasks SET available = TRUE, taken_by = NULL WHERE task_id = $1 AND remaining_quantity > 0',
             task_id
@@ -1668,7 +1639,6 @@ async def remove_user_task_task_id(update: Update, context: ContextTypes.DEFAULT
 
 # ==================== УДАЛЕНИЕ ЗАДАНИЯ (ДЛЯ ВСЕХ АДМИНОВ) ====================
 async def delete_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало процесса удаления задания (полное удаление из БД)"""
     if not await AdminManager.is_admin(update.effective_user.id):
         await update.callback_query.answer("⛔ У вас нет прав администратора!", show_alert=True)
         return ConversationHandler.END
@@ -1685,7 +1655,6 @@ async def delete_task_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return DELETE_TASK_ID
 
 async def delete_task_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение ID задания и его удаление"""
     if update.message.text == '/cancel':
         await update.message.reply_text("❌ Операция отменена.")
         context.user_data.clear()
@@ -1694,7 +1663,6 @@ async def delete_task_id_received(update: Update, context: ContextTypes.DEFAULT_
     task_id = update.message.text.strip()
     admin_id = update.effective_user.id
 
-    # Проверяем существование задания
     task = await TaskManager.get_by_id(task_id)
     if not task:
         await update.message.reply_text(
@@ -1703,7 +1671,6 @@ async def delete_task_id_received(update: Update, context: ContextTypes.DEFAULT_
         )
         return DELETE_TASK_ID
 
-    # Подтверждение удаления
     keyboard = [
         [
             InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_{task_id}"),
@@ -1719,10 +1686,9 @@ async def delete_task_id_received(update: Update, context: ContextTypes.DEFAULT_
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return ConversationHandler.END  # Выходим из диалога, дальше обработаем callback
+    return ConversationHandler.END
 
 async def confirm_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение удаления задания"""
     query = update.callback_query
     await query.answer()
 
@@ -1730,7 +1696,6 @@ async def confirm_delete_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("❌ Удаление отменено.")
         return
 
-    # data = "confirm_delete_TASK_ID"
     task_id = query.data.split('_')[2]
     admin_id = update.effective_user.id
 
@@ -1740,8 +1705,9 @@ async def confirm_delete_callback(update: Update, context: ContextTypes.DEFAULT_
     else:
         await query.edit_message_text(f"❌ Не удалось удалить задание {task_id}.")
 
-# ==================== ПОЛЬЗОВАТЕЛЬСКИЕ ДЕЙСТВИЯ ====================
+# ==================== ПОКАЗ ЗАДАНИЙ И ВЗЯТИЕ ====================
 async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, category_id: Optional[int]):
+    """Показывает список доступных заданий"""
     query = update.callback_query
     logger.info(f"Запрос заданий для категории: {category_id}")
 
@@ -1757,8 +1723,7 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, categor
 
     await query.edit_message_text(
         f"📋 <b>Доступные задания:</b>\n\n"
-        f"Найдено заданий: {len(tasks_list)}\n"
-        f"Выберите задание из списка ниже:",
+        f"Найдено заданий: {len(tasks_list)}",
         parse_mode=ParseMode.HTML
     )
 
@@ -1770,139 +1735,30 @@ async def show_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, categor
             f"🎯 <b>Цель:</b> {task['target']}\n"
             f"📌 <b>Требования:</b> {task['requirements'] or 'нет'}\n"
         )
+        
         if task.get('available_quantities'):
             try:
-                quantities = json.loads(task['available_quantities'])
-                # Отображаем доступные варианты
-                text += f"📊 <b>Доступные объёмы:</b>\n"
-                for q in quantities:
-                    if q <= task['remaining_quantity']:
+                quantities = json.loads(task['available_quantities']) if isinstance(task['available_quantities'], str) else task['available_quantities']
+                valid_quantities = [q for q in quantities if q <= task['remaining_quantity']]
+                if valid_quantities:
+                    text += f"📊 <b>Доступные объёмы:</b>\n"
+                    for q in valid_quantities:
                         price = q * task['price_per_unit']
                         text += f"  • {q} ед. — {price} ₽\n"
+                text += f"\n<i>Осталось всего: {task['remaining_quantity']} из {task['total_quantity']} ед.</i>\n"
             except:
                 pass
-        else:
-            text += f"📊 <b>Объём:</b> 1 ед.\n"
-
-        keyboard = []
-        if task.get('available_quantities'):
-            # Показываем кнопки для каждого доступного объёма
-            try:
-                quantities = json.loads(task['available_quantities'])
-                for q in quantities:
-                    if q <= task['remaining_quantity']:
-                        price = q * task['price_per_unit']
-                        keyboard.append([InlineKeyboardButton(
-                            f"Взять {q} ед. — {price} ₽",
-                            callback_data=f"take_partial_{task['task_id']}_{q}"
-                        )])
-            except:
-                pass
-        else:
-            keyboard.append([InlineKeyboardButton("✅ Взять задание", callback_data=f"take_{task['task_id']}")])
+        
+        keyboard = [[InlineKeyboardButton("✅ Взять задание", callback_data=f"take_{task['task_id']}")]]
         
         await query.message.reply_text(
             text,
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-# Новый обработчик для частичного взятия
-async def take_partial_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data_parts = query.data.split('_')
-    # data = "take_partial_TASK_ID_QUANTITY"
-    task_id = data_parts[2]
-    quantity = int(data_parts[3])
-    user_id = update.effective_user.id
-
-    user = await UserManager.get(user_id)
-    if not user:
-        await query.edit_message_text(
-            "❌ Сначала зарегистрируйтесь через /start",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data="back_main")]])
-        )
-        return
-
-    task = await TaskManager.get_by_id(task_id)
-    if not task or task['remaining_quantity'] < quantity:
-        await query.edit_message_text(
-            "❌ Это задание уже недоступно в таком объёме.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 Другие задания", callback_data="user_tasks")]])
-        )
-        return
-
-    # Резервируем часть
-    success = await TaskManager.take_partial(task_id, user_id, quantity)
-    if not success:
-        await query.edit_message_text(
-            "❌ Не удалось взять задание. Попробуйте позже.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"take_{task_id}")]])
-        )
-        return
-
-    # Создаём отслеживающую ссылку
-    tracking_link = await TrackingManager.generate_link(user_id, task_id)
-    # Сохраняем в ожидающие (без изменения, так как задание уже частичное)
-    await PendingManager.save(
-        task_id, user_id,
-        user.get('username', ''),
-        task['title'],
-        tracking_link
-    )
-
-    # Уведомление администраторам в группу
-    admin_msg = (
-        f"🆕 <b>ЧАСТЬ ЗАДАНИЯ ВЗЯТА!</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👤 <b>Пользователь:</b>\n"
-        f"  • ID: <code>{user_id}</code>\n"
-        f"  • Username: @{user.get('username', 'нет')}\n"
-        f"  • Имя: {user.get('first_name', 'не указано')}\n\n"
-        f"📋 <b>Задание:</b>\n"
-        f"  • Название: {task['title']}\n"
-        f"  • ID: <code>{task_id}</code>\n"
-        f"  • Взято единиц: {quantity}\n"
-        f"  • Цена за единицу: {task['price_per_unit']} ₽\n"
-        f"  • Стоимость: {quantity * task['price_per_unit']} ₽\n"
-        f"  • Осталось единиц: {task['remaining_quantity'] - quantity}\n\n"
-        f"🔗 <b>Отслеживающая ссылка:</b>\n"
-        f"{tracking_link}\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⚠️ <b>ТРЕБУЕТСЯ ВЫДАТЬ РАБОЧУЮ ССЫЛКУ!</b>\n\n"
-        f"📌 <b>Команда для выдачи:</b>\n"
-        f"<code>/give_link {task_id} ССЫЛКА_СЮДА</code>"
-    )
-
-    try:
-        await context.bot.send_message(
-            chat_id=GROUP_ID,
-            text=admin_msg,
-            parse_mode=ParseMode.HTML,
-            message_thread_id=TOPIC_LINKS
-        )
-        logger.info(f"✅ Уведомление отправлено в тему 'ссылки' (ID: {TOPIC_LINKS}) для задания {task_id}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка отправки в тему 'ссылки': {e}")
-
-    await query.edit_message_text(
-        f"✅ <b>Вы взяли часть задания!</b>\n\n"
-        f"📋 <b>Задание:</b> {task['title']}\n"
-        f"📊 <b>Взято единиц:</b> {quantity}\n"
-        f"💰 <b>Стоимость:</b> {quantity * task['price_per_unit']} ₽\n\n"
-        f"⏳ <b>Что дальше?</b>\n"
-        f"1️⃣ Ожидайте, администратор выдаст рабочую ссылку\n"
-        f"2️⃣ Вы получите уведомление, когда ссылка будет готова\n"
-        f"3️⃣ Используйте свою ссылку для приглашений\n\n"
-        f"Обычно ожидание занимает несколько минут.",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 Мои задания", callback_data="user_my_tasks")]])
-    )
-
-# Оригинальный обработчик для простых заданий
 async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатия на кнопку 'Взять задание'"""
     query = update.callback_query
     await query.answer()
 
@@ -1925,17 +1781,133 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    # Проверяем, не многочастное ли задание? Если да, то нужно использовать другой обработчик.
+    context.user_data['taking_task_id'] = task_id
+    context.user_data['taking_task'] = task
+
     if task.get('available_quantities'):
-        # Если задание многочастное, но нажата обычная кнопка "Взять", покажем варианты
-        # На самом деле, мы уже в show_tasks выводим кнопки с выбором, но на всякий случай:
+        try:
+            quantities = json.loads(task['available_quantities']) if isinstance(task['available_quantities'], str) else task['available_quantities']
+            valid_quantities = [q for q in quantities if q <= task['remaining_quantity']]
+            
+            if not valid_quantities:
+                await query.edit_message_text(
+                    "❌ К сожалению, все доступные объёмы уже разобраны.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 Другие задания", callback_data="user_tasks")]])
+                )
+                return
+            
+            text = (
+                f"📋 <b>{task['title']}</b>\n\n"
+                f"Выберите количество единиц для выполнения:\n\n"
+            )
+            
+            keyboard = []
+            for q in valid_quantities:
+                price = q * task['price_per_unit']
+                button_text = f"{q} ед. — {price} ₽"
+                keyboard.append([InlineKeyboardButton(button_text, callback_data=f"take_quantity_{task_id}_{q}")])
+            
+            keyboard.append([InlineKeyboardButton("🔙 Отмена", callback_data="user_tasks")])
+            
+            await query.edit_message_text(
+                text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+        
+        except Exception as e:
+            logger.error(f"Ошибка при обработке quantities: {e}")
+    
+    await take_simple_task(query, context, task_id, user_id, task)
+
+async def take_quantity_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик выбора количества для многочастного задания"""
+    query = update.callback_query
+    await query.answer()
+
+    data_parts = query.data.split('_')
+    task_id = data_parts[2]
+    quantity = int(data_parts[3])
+    user_id = update.effective_user.id
+
+    user = await UserManager.get(user_id)
+    task = await TaskManager.get_by_id(task_id)
+
+    if not task or task['remaining_quantity'] < quantity:
         await query.edit_message_text(
-            "❌ Это задание можно брать только частями. Выберите объём из списка выше.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 К заданиям", callback_data="user_tasks")]])
+            "❌ К сожалению, выбранный объём уже недоступен.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 Другие задания", callback_data="user_tasks")]])
         )
         return
 
-    # Простое задание
+    success = await TaskManager.take_partial(task_id, user_id, quantity)
+    if not success:
+        await query.edit_message_text(
+            "❌ Не удалось взять задание. Попробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Попробовать снова", callback_data=f"take_{task_id}")]])
+        )
+        return
+
+    tracking_link = await TrackingManager.generate_link(user_id, task_id)
+    
+    await PendingManager.save(
+        task_id, user_id,
+        user.get('username', ''),
+        task['title'],
+        tracking_link
+    )
+
+    price = quantity * task['price_per_unit']
+    admin_msg = (
+        f"🆕 <b>ЧАСТЬ ЗАДАНИЯ ВЗЯТА!</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 <b>Пользователь:</b>\n"
+        f"  • ID: <code>{user_id}</code>\n"
+        f"  • Username: @{user.get('username', 'нет')}\n"
+        f"  • Имя: {user.get('first_name', 'не указано')}\n\n"
+        f"📋 <b>Задание:</b>\n"
+        f"  • Название: {task['title']}\n"
+        f"  • ID: <code>{task_id}</code>\n"
+        f"  • Взято единиц: {quantity}\n"
+        f"  • Цена за единицу: {task['price_per_unit']} ₽\n"
+        f"  • Стоимость: {price} ₽\n"
+        f"  • Осталось единиц: {task['remaining_quantity'] - quantity}\n\n"
+        f"🔗 <b>Отслеживающая ссылка:</b>\n"
+        f"{tracking_link}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"⚠️ <b>ТРЕБУЕТСЯ ВЫДАТЬ РАБОЧУЮ ССЫЛКУ!</b>\n\n"
+        f"📌 <b>Команда для выдачи:</b>\n"
+        f"<code>/give_link {task_id} ССЫЛКА_СЮДА</code>"
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=GROUP_ID,
+            text=admin_msg,
+            parse_mode=ParseMode.HTML,
+            message_thread_id=TOPIC_LINKS
+        )
+        logger.info(f"✅ Уведомление отправлено в тему 'ссылки' для задания {task_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки в тему 'ссылки': {e}")
+
+    await query.edit_message_text(
+        f"✅ <b>Вы взяли часть задания!</b>\n\n"
+        f"📋 <b>Задание:</b> {task['title']}\n"
+        f"📊 <b>Взято единиц:</b> {quantity}\n"
+        f"💰 <b>Стоимость:</b> {price} ₽\n\n"
+        f"⏳ <b>Что дальше?</b>\n"
+        f"1️⃣ Ожидайте, администратор выдаст рабочую ссылку\n"
+        f"2️⃣ Вы получите уведомление, когда ссылка будет готова\n"
+        f"3️⃣ Используйте свою ссылку для приглашений\n\n"
+        f"Обычно ожидание занимает несколько минут.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 Мои задания", callback_data="user_my_tasks")]])
+    )
+
+async def take_simple_task(query, context, task_id: str, user_id: int, task: dict):
+    """Вспомогательная функция для взятия простого задания"""
     success = await TaskManager.assign(task_id, user_id)
     if not success:
         await query.edit_message_text(
@@ -1945,6 +1917,8 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     tracking_link = await TrackingManager.generate_link(user_id, task_id)
+    user = await UserManager.get(user_id)
+    
     await PendingManager.save(
         task_id, user_id,
         user.get('username', ''),
@@ -1978,7 +1952,6 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode=ParseMode.HTML,
             message_thread_id=TOPIC_LINKS
         )
-        logger.info(f"✅ Уведомление отправлено в тему 'ссылки' (ID: {TOPIC_LINKS}) для задания {task_id}")
     except Exception as e:
         logger.error(f"❌ Ошибка отправки в тему 'ссылки': {e}")
 
@@ -2137,9 +2110,9 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     data = query.data
     
-    if data.startswith(('approve_', 'reject_', 'complete_', 'answer_user_', 'confirm_delete_', 'take_partial_')):
+    if data.startswith(('approve_', 'reject_', 'complete_', 'answer_user_', 'confirm_delete_', 'take_quantity_')):
         logger.info(f"Пропускаем через main_button_handler: {data}")
-        return  # Пусть обрабатывается более конкретными обработчиками
+        return
     
     await query.answer()
     logger.info(f"Главный обработчик: нажата кнопка {data}")
@@ -2200,7 +2173,6 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await delete_task_start(update, context)
 
 async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Перехватывает сообщения (текст или фото) от пользователей, ожидающих отправки данных карты."""
     user_id = update.effective_user.id
     logger.info(f"Получено сообщение от пользователя {user_id} в ожидании данных карты")
     
@@ -2258,7 +2230,6 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"❌ Ошибка при пересылке в группу отчётов: {e}")
         logger.exception("Полный стек ошибки:")
         
-        # Отправка администраторам в ЛС как запасной вариант
         admins = await AdminManager.get_all_admins()
         sent = False
         for admin in admins:
@@ -2289,12 +2260,7 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
 
-    # ЗАВЕРШАЕМ ЗАДАНИЕ ПОСЛЕ ПОЛУЧЕНИЯ ДАННЫХ КАРТЫ
-    logger.info(f"Попытка завершения задания {task_id} для пользователя {user_id}")
-    
-    # Используем транзакцию для завершения задания
     async with Database.transaction() as conn:
-        # Проверяем, не завершено ли уже задание
         task_check = await conn.fetchrow(
             'SELECT completed FROM tasks WHERE task_id = $1',
             task_id
@@ -2308,7 +2274,6 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             await PaymentAwaitingManager.mark_completed(awaiting['id'])
             return
         
-        # Завершаем задание
         await conn.execute('''
             UPDATE tasks 
             SET completed = TRUE, 
@@ -2318,7 +2283,6 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             WHERE task_id = $1
         ''', task_id, "payment_data_sent")
         
-        # Обновляем user_tasks
         await conn.execute('''
             UPDATE user_tasks 
             SET status = 'completed', 
@@ -2327,7 +2291,6 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             WHERE user_id = $3 AND task_id = $1
         ''', task_id, task['reward'], user_id)
         
-        # Обновляем пользователя
         await conn.execute('''
             UPDATE users 
             SET total_earned = total_earned + $2, 
@@ -2335,7 +2298,6 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             WHERE user_id = $1
         ''', user_id, task['reward'])
         
-        # Обновляем статистику
         await conn.execute('''
             INSERT INTO stats (date, tasks_completed, total_payout) 
             VALUES (CURRENT_DATE, 1, $1)
@@ -2346,13 +2308,13 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     logger.info(f"✅ Задание {task_id} успешно завершено для пользователя {user_id}")
 
-    # Отмечаем запись в payment_awaiting как выполненную
     await PaymentAwaitingManager.mark_completed(awaiting['id'])
 
     await update.message.reply_text(
         "✅ Спасибо! Ваши данные получены. Задание успешно завершено, награда зачислена.\n"
         "Вы можете проверить свой профиль командой /profile."
     )
+
 # ==================== КОМАНДЫ ====================
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_main_admin(update.effective_user.id):
@@ -2414,7 +2376,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Message text: {update.message.text}")
 
 async def check_bot_permissions(application: Application):
-    """Проверяет права бота в группе"""
     try:
         chat = await application.bot.get_chat(GROUP_ID)
         logger.info(f"✅ Группа найдена: {chat.title} (ID: {chat.id})")
@@ -2427,9 +2388,7 @@ async def check_bot_permissions(application: Application):
         else:
             logger.info("✅ Бот является администратором группы")
             
-        # Проверяем доступ к темам
         try:
-            # Пробуем отправить тестовое сообщение в тему
             await application.bot.send_message(
                 chat_id=GROUP_ID,
                 text="✅ Бот успешно подключен к группе и темам!",
@@ -2444,7 +2403,7 @@ async def check_bot_permissions(application: Application):
 
 async def post_init(application: Application):
     await Database.init_pool()
-    await check_bot_permissions(application)  # Добавьте эту строку
+    await check_bot_permissions(application)
     logger.info("✅ Бот запущен и готов к работе!")
     logger.info(f"👑 Главный администратор: {MAIN_ADMIN_ID}")
     logger.info(f"📢 Группа ID: {GROUP_ID}")
@@ -2462,26 +2421,15 @@ def main():
     application = Application.builder().token(TOKEN).post_init(post_init).build()
     application.post_shutdown = shutdown
 
-    # ========== 1. СНАЧАЛА САМЫЕ КОНКРЕТНЫЕ ОБРАБОТЧИКИ ==========
-    # Обработчики для кнопок подтверждения/отклонения (самые приоритетные)
+    # ========== 1. САМЫЕ КОНКРЕТНЫЕ ОБРАБОТЧИКИ ==========
     application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_\\d+$"))
     application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_\\d+$"))
-    
-    # Обработчик для кнопки "Я выполнил задание"
     application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
-    
-    # Обработчик для ответа пользователю
     application.add_handler(CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$"))
-
-    # Обработчик подтверждения удаления задания
     application.add_handler(CallbackQueryHandler(confirm_delete_callback, pattern="^(confirm_delete_|cancel_delete)$"))
+    application.add_handler(CallbackQueryHandler(take_quantity_callback, pattern="^take_quantity_[a-zA-Z0-9]+_\\d+$"))
 
-    # Обработчик частичного взятия задания
-    application.add_handler(CallbackQueryHandler(take_partial_callback, pattern="^take_partial_[a-zA-Z0-9]+_\\d+$"))
-
-    # ========== 2. ПОТОМ ДИАЛОГИ ==========
-    
-    # Диалог для вопросов от пользователей
+    # ========== 2. ДИАЛОГИ ==========
     ask_question_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_question_start, pattern="^ask_question$")],
         states={
@@ -2494,7 +2442,6 @@ def main():
     )
     application.add_handler(ask_question_conv)
 
-    # Диалог для ответов администратора
     admin_reply_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$")],
         states={
@@ -2507,7 +2454,6 @@ def main():
     )
     application.add_handler(admin_reply_conv)
 
-    # Диалог рассылки
     broadcast_conv = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_start)],
         states={
@@ -2519,7 +2465,6 @@ def main():
     )
     application.add_handler(broadcast_conv)
 
-    # Диалог удаления задания у пользователя
     remove_task_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(remove_user_task_start, pattern="^admin_remove_user_task_start$")],
         states={
@@ -2532,7 +2477,6 @@ def main():
     )
     application.add_handler(remove_task_conv)
 
-    # Диалог удаления задания (полное удаление)
     delete_task_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(delete_task_start, pattern="^admin_delete_task_start$")],
         states={
@@ -2544,7 +2488,6 @@ def main():
     )
     application.add_handler(delete_task_conv)
 
-    # Диалог добавления администратора
     conv_add_admin = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_admin_start, pattern="^admin_add_admin_start$")],
         states={
@@ -2557,7 +2500,6 @@ def main():
     )
     application.add_handler(conv_add_admin)
 
-    # Диалог добавления категории
     conv_add_category = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_category_start, pattern="^admin_add_category$")],
         states={
@@ -2570,7 +2512,6 @@ def main():
     )
     application.add_handler(conv_add_category)
 
-    # Диалог создания задания (обновлён)
     conv_create_task = ConversationHandler(
         entry_points=[
             CommandHandler("create_task", create_task_start),
@@ -2592,7 +2533,7 @@ def main():
     )
     application.add_handler(conv_create_task)
 
-    # ========== 3. ПОТОМ КОМАНДЫ ==========
+    # ========== 3. КОМАНДЫ ==========
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("profile", profile))
@@ -2608,10 +2549,10 @@ def main():
     application.add_handler(CommandHandler("users_list", users_list_command))
     application.add_handler(CommandHandler("check_admin", check_admin_command))
 
-    # ========== 4. ПОТОМ ОБЩИЙ ОБРАБОТЧИК КНОПОК (САМЫЙ НИЗКИЙ ПРИОРИТЕТ) ==========
+    # ========== 4. ОБЩИЙ ОБРАБОТЧИК КНОПОК ==========
     application.add_handler(CallbackQueryHandler(main_button_handler))
 
-    # ========== 5. ПОТОМ ОБРАБОТЧИКИ СООБЩЕНИЙ ==========
+    # ========== 5. ОБРАБОТЧИКИ СООБЩЕНИЙ ==========
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_payment_data))
     application.add_handler(MessageHandler(filters.PHOTO, handle_payment_data))
 
