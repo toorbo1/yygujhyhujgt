@@ -240,13 +240,24 @@ class AdminManager:
 
     @staticmethod
     async def is_admin(user_id: int) -> bool:
-        # Главный админ всегда админ
-        if user_id == AdminManager.MAIN_ADMIN_ID:
-            return True
-        async with Database._pool.acquire() as conn:
-            val = await conn.fetchval('SELECT is_admin FROM users WHERE user_id = $1', user_id)
-            # Явно преобразуем в bool и проверяем на None
-            return bool(val) if val is not None else False
+    # Главный админ всегда админ
+      if user_id == AdminManager.MAIN_ADMIN_ID:
+          logger.info(f"Пользователь {user_id} является главным администратором")
+          return True
+      
+      async with Database._pool.acquire() as conn:
+          # Проверяем наличие пользователя в таблице users
+          user = await conn.fetchrow('SELECT user_id, is_admin FROM users WHERE user_id = $1', user_id)
+          
+          if user is None:
+              logger.warning(f"Пользователь {user_id} не найден в базе данных")
+              return False
+          
+          is_admin_value = user['is_admin']
+          logger.info(f"Пользователь {user_id}, is_admin из БД: {is_admin_value} (тип: {type(is_admin_value)})")
+          
+          # Явно преобразуем в bool
+          return bool(is_admin_value) if is_admin_value is not None else False
 
     @staticmethod
     async def is_main_admin(user_id: int) -> bool:

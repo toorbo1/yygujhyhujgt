@@ -217,6 +217,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Попытка открыть админ-панель пользователем {user_id}")
     
+    # Проверка прав администратора
     is_admin = await AdminManager.is_admin(user_id)
     logger.info(f"Результат проверки is_admin: {is_admin}")
     
@@ -230,6 +231,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     is_main = await AdminManager.is_main_admin(user_id)
     logger.info(f"Результат проверки is_main_admin: {is_main}")
+
+    # ... остальной код ...
 
     keyboard = [
         [InlineKeyboardButton("📋 Управление заданиями", callback_data="admin_tasks_menu")],
@@ -250,7 +253,36 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
+async def check_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка статуса администратора (только для отладки)"""
+    user_id = update.effective_user.id
+    
+    # Проверяем через AdminManager
+    is_admin = await AdminManager.is_admin(user_id)
+    is_main = await AdminManager.is_main_admin(user_id)
+    
+    # Проверяем напрямую через БД
+    async with Database._pool.acquire() as conn:
+        user = await conn.fetchrow('SELECT user_id, is_admin FROM users WHERE user_id = $1', user_id)
+        user_exists = user is not None
+        db_is_admin = user['is_admin'] if user else None
+    
+    text = (
+        f"🔍 <b>Проверка статуса администратора</b>\n\n"
+        f"👤 <b>Ваш ID:</b> <code>{user_id}</code>\n"
+        f"👑 <b>Главный админ ID:</b> <code>{AdminManager.MAIN_ADMIN_ID}</code>\n"
+        f"📊 <b>Совпадает с главным:</b> {'✅ Да' if is_main else '❌ Нет'}\n\n"
+        f"📋 <b>Результаты проверки:</b>\n"
+        f"• AdminManager.is_admin: {'✅ Да' if is_admin else '❌ Нет'}\n"
+        f"• Пользователь в БД: {'✅ Да' if user_exists else '❌ Нет'}\n"
+        f"• is_admin в БД: {db_is_admin if db_is_admin is not None else 'None'}\n\n"
+        f"<b>Если вы должны быть администратором, но проверка не проходит:</b>\n"
+        f"1. Проверьте правильность ID в .env файле\n"
+        f"2. Убедитесь, что вы зарегистрированы (/start)\n"
+        f"3. Попробуйте добавить себя через /add_admin {user_id}"
+    )
+    
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 # ==================== УПРАВЛЕНИЕ АДМИНАМИ ====================
 async def manage_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_main_admin(update.effective_user.id):
