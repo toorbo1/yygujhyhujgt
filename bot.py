@@ -24,7 +24,7 @@ WELCOME_VIDEO_PATH = os.path.join(os.path.dirname(__file__), "video.mp4")
 
 # ==================== НАСТРОЙКИ ====================
 TOKEN = os.environ.get('BOT_TOKEN')
-MAIN_ADMIN_ID = int(os.environ.get('MAIN_ADMIN_ID', '8358009538'))
+MAIN_ADMIN_ID = int(os.environ.get('MAIN_ADMIN_ID', '8358009538 '))
 GROUP_ID = int(os.environ.get('GROUP_ID', '-1003768763215'))  # ID группы с префиксом -100
 BOT_USERNAME = os.environ.get('BOT_USERNAME', 'TrafficWorkeee_bot')
 
