@@ -81,6 +81,16 @@ class Database:
                     UNIQUE(task_id, user_id, status)  -- можно один активный запрос на пару
                 )
             ''')
+            await conn.execute('''
+    CREATE TABLE IF NOT EXISTS payment_awaiting (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        request_id INTEGER REFERENCES completion_requests(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT NOW(),
+        status TEXT DEFAULT 'waiting'
+    )
+''')
                         # ---- Задания ----
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -691,3 +701,30 @@ class CompletionManager:
                 WHERE id = $1 AND status = 'pending'
             ''', request_id, admin_id)
             return result == "UPDATE 1"
+        
+class PaymentAwaitingManager:
+    @staticmethod
+    async def add(user_id: int, task_id: str, request_id: int) -> int:
+        async with Database._pool.acquire() as conn:
+            row = await conn.fetchrow('''
+                INSERT INTO payment_awaiting (user_id, task_id, request_id)
+                VALUES ($1, $2, $3)
+                RETURNING id
+            ''', user_id, task_id, request_id)
+            return row['id']
+
+    @staticmethod
+    async def get_by_user(user_id: int) -> Optional[dict]:
+        async with Database._pool.acquire() as conn:
+            row = await conn.fetchrow('''
+                SELECT * FROM payment_awaiting
+                WHERE user_id = $1 AND status = 'waiting'
+                ORDER BY created_at DESC
+                LIMIT 1
+            ''', user_id)
+            return dict(row) if row else None
+
+    @staticmethod
+    async def mark_completed(awaiting_id: int):
+        async with Database._pool.acquire() as conn:
+            await conn.execute('UPDATE payment_awaiting SET status = $1 WHERE id = $2', 'completed', awaiting_id)
