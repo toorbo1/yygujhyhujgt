@@ -280,13 +280,13 @@ async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if not await AdminManager.is_admin(update.effective_user.id):
         await query.edit_message_text("⛔ У вас нет прав администратора.")
-        return
+        return ConversationHandler.END
 
     try:
         user_id = int(query.data.split('_')[2])
     except (IndexError, ValueError):
         await query.edit_message_text("❌ Неверный формат данных.")
-        return
+        return ConversationHandler.END
 
     context.user_data['reply_to_user'] = user_id
     
@@ -297,7 +297,7 @@ async def answer_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode=ParseMode.HTML
     )
     
-    return ASK_QUESTION
+    return ASK_QUESTION  # Важно вернуть состояние!
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ответа администратора пользователю"""
@@ -314,6 +314,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     admin = update.effective_user
 
     try:
+        # Отправляем ответ пользователю
         await context.bot.send_message(
             user_id,
             f"📝 <b>Ответ от администратора</b>\n\n{reply_text}",
@@ -324,6 +325,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"✅ Ответ отправлен пользователю {user_id}."
         )
         
+        # Отправляем подтверждение в группу
         await context.bot.send_message(
             chat_id=GROUP_ID,
             text=(
@@ -2112,7 +2114,18 @@ def main():
         name="ask_question_conv"
     )
     application.add_handler(ask_question_conv)
+# После ask_question_conv добавьте:
 
+    admin_reply_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$")],
+        states={
+            ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_reply)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        name="admin_reply_conv",
+        allow_reentry=True
+    )
+    application.add_handler(admin_reply_conv)
     # ========== 3. ПОТОМ КОМАНДЫ ==========
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
