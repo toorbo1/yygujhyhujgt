@@ -14,7 +14,7 @@ from telegram.constants import ParseMode
 from dotenv import load_dotenv
 from telegram.error import BadRequest
 load_dotenv()
-
+from database import CompletionManager
 from database import (
     Database, UserManager, AdminManager, CategoryManager,
     TaskManager, TrackingManager, PendingManager, StatsManager
@@ -194,25 +194,24 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     for task in tasks_list:
-        status_emoji = "✅" if task.get('completed', False) else "⏳"
-        text = (
-            f"{status_emoji} <b>{task['title']}</b>\n"
-            f"ID: <code>{task['task_id']}</code>\n"
-            f"Статус: {'Выполнено' if task.get('completed', False) else 'В работе'}\n"
-        )
-        if task.get('earned'):
-            text += f"Заработано: {task['earned']} ₽\n"
-        
-        keyboard = []
-        if not task.get('completed', False):
-            support_msg = f"я сделал задание: {task['title']} (ID: {task['task_id']})"
-            encoded_msg = urllib.parse.quote(support_msg)
-            url = f"https://t.me/V2SHOP123?text={encoded_msg}"
-            keyboard.append([InlineKeyboardButton("✅ Сделал задание", url=url)])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-        await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-
+      status_emoji = "✅" if task.get('completed', False) else "⏳"
+      reward = task.get('reward', 0)
+      text = (
+          f"{status_emoji} <b>{task['title']}</b>\n"
+          f"ID: <code>{task['task_id']}</code>\n"
+          f"💰 Награда: {reward} ₽\n"
+          f"Статус: {'Выполнено' if task.get('completed', False) else 'В работе'}\n"
+      )
+      if task.get('earned'):
+          text += f"Заработано: {task['earned']} ₽\n"
+      
+      keyboard = []
+      if not task.get('completed', False):
+          # Вместо URL используем callback
+          keyboard.append([InlineKeyboardButton("✅ Я выполнил задание", callback_data=f"complete_{task['task_id']}")])
+      
+      reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+      await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 # ==================== АДМИН-ПАНЕЛЬ ====================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -974,6 +973,152 @@ async def create_task_finish(update, context):
         else:
             await update.edit_message_text(error_text)
 
+async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пользователь нажимает «Я выполнил задание»"""
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    task_id = query.data.split('_')[1]   # complete_taskId
+
+    # Проверим, что задание действительно взято этим пользователем и ещё не выполнено
+    task = await TaskManager.get_by_id(task_id)
+    if not task:
+        await query.edit_message_text("❌ Задание не найдено.")
+        return
+
+    # Проверим через user_tasks, что задание принадлежит пользователю
+    async with Database._pool.acquire() as conn:
+        ut = await conn.fetchrow('SELECT * FROM user_tasks WHERE user_id = $1 AND task_id = $2', user_id, task_id)
+        if not ut:
+            await query.edit_message_text("❌ Это задание не было вами взято.")
+            return
+        if ut['status'] == 'completed':
+            await query.edit_message_text("✅ Это задание уже выполнено и подтверждено.")
+            return
+
+    # Создаём запрос на подтверждение
+    request_id = await CompletionManager.create_request(task_id, user_id)
+
+    # Отправляем уведомление администраторам (в группу или главному админу)
+    admin_chat = TASK_NOTIFICATION_GROUP  # или можно MAIN_ADMIN_ID
+    user = await UserManager.get(user_id)
+    text = (
+        f"🔔 <b>Запрос на подтверждение выполнения</b>\n\n"
+        f"👤 Пользователь: @{user['username'] or 'нет'} (ID: {user_id})\n"
+        f"📋 Задание: {task['title']}\n"
+        f"🆔 ID задания: <code>{task_id}</code>\n"
+        f"💰 Награда: {task['reward']} ₽\n\n"
+        f"Подтвердите или отклоните выполнение:"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve_{request_id}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{request_id}")
+        ]
+    ]
+    try:
+        await context.bot.send_message(admin_chat, text, parse_mode=ParseMode.HTML,
+                                       reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception as e:
+        logger.error(f"Не удалось отправить уведомление админу: {e}")
+        await query.edit_message_text("⚠️ Не удалось отправить запрос администратору. Попробуйте позже.")
+        return
+
+    await query.edit_message_text(
+        f"✅ Запрос на подтверждение отправлен администратору.\n"
+        f"Ожидайте, после проверки вы получите уведомление."
+    )
+
+async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Админ подтверждает выполнение"""
+    query = update.callback_query
+    await query.answer()
+    admin_id = update.effective_user.id
+
+    if not await AdminManager.is_admin(admin_id):
+        await query.edit_message_text("⛔ У вас нет прав администратора.")
+        return
+
+    request_id = int(query.data.split('_')[1])
+    req = await CompletionManager.get_request(request_id)
+    if not req or req['status'] != 'pending':
+        await query.edit_message_text("❌ Запрос уже обработан.")
+        return
+
+    success = await CompletionManager.approve_request(request_id, admin_id)
+    if success:
+        # Уведомляем пользователя
+        try:
+            await context.bot.send_message(
+                req['user_id'],
+                f"✅ <b>Задание подтверждено!</b>\n\n"
+                f"Ваше задание «{req['task_title']}» проверено и подтверждено.\n"
+                f"Награда {req['reward']} ₽ зачислена на ваш счёт."
+            )
+        except Exception as e:
+            logger.error(f"Не удалось уведомить пользователя {req['user_id']}: {e}")
+
+        await query.edit_message_text(
+            f"✅ Запрос #{request_id} подтверждён. Пользователь уведомлён."
+        )
+    else:
+        await query.edit_message_text("❌ Не удалось подтвердить запрос.")
+
+async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Админ отклоняет выполнение"""
+    query = update.callback_query
+    await query.answer()
+    admin_id = update.effective_user.id
+
+    if not await AdminManager.is_admin(admin_id):
+        await query.edit_message_text("⛔ У вас нет прав администратора.")
+        return
+
+    request_id = int(query.data.split('_')[1])
+    req = await CompletionManager.get_request(request_id)
+    if not req or req['status'] != 'pending':
+        await query.edit_message_text("❌ Запрос уже обработан.")
+        return
+
+    success = await CompletionManager.reject_request(request_id, admin_id)
+    if success:
+        # Уведомляем пользователя
+        try:
+            await context.bot.send_message(
+                req['user_id'],
+                f"❌ <b>Задание отклонено</b>\n\n"
+                f"К сожалению, ваше выполнение задания «{req['task_title']}» не было подтверждено.\n"
+                f"Свяжитесь с администратором для уточнения причин."
+            )
+        except Exception as e:
+            logger.error(f"Не удалось уведомить пользователя {req['user_id']}: {e}")
+
+        await query.edit_message_text(
+            f"❌ Запрос #{request_id} отклонён. Пользователь уведомлён."
+        )
+    else:
+        await query.edit_message_text("❌ Не удалось отклонить запрос.")
+
+async def pending_completions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать список ожидающих подтверждения (для админов)"""
+    if not await AdminManager.is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Только для администраторов.")
+        return
+
+    requests = await CompletionManager.get_pending_requests()
+    if not requests:
+        await update.message.reply_text("📭 Нет ожидающих запросов на подтверждение.")
+        return
+
+    text = "⏳ <b>Ожидают подтверждения:</b>\n\n"
+    for r in requests:
+        text += f"🔸 <b>{r['task_title']}</b>\n"
+        text += f"   👤 @{r['username']} (ID: {r['user_id']})\n"
+        text += f"   💰 {r['reward']} ₽\n"
+        text += f"   🕒 {r['request_date'].strftime('%d.%m.%Y %H:%M')}\n"
+        text += f"   🔹 ID запроса: {r['id']}\n\n"
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
 # ==================== ВЫДАЧА ССЫЛОК ====================
 async def give_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
@@ -1600,4 +1745,5 @@ def main():
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
+    
     main()

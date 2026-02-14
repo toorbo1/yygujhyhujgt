@@ -68,8 +68,20 @@ class Database:
                     completed_tasks INTEGER DEFAULT 0
                 )
             ''')
-
-            # ---- Задания ----
+            # Таблица запросов на подтверждение выполнения задания
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS completion_requests (
+                    id SERIAL PRIMARY KEY,
+                    task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+                    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    request_date TIMESTAMP DEFAULT NOW(),
+                    status TEXT DEFAULT 'pending',   -- pending, approved, rejected
+                    admin_id BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
+                    processed_date TIMESTAMP,
+                    UNIQUE(task_id, user_id, status)  -- можно один активный запрос на пару
+                )
+            ''')
+                        # ---- Задания ----
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS tasks (
                     task_id TEXT PRIMARY KEY,
@@ -570,3 +582,112 @@ class StatsManager:
                 ORDER BY date DESC
             ''', days)
             return [dict(r) for r in rows]
+
+class CompletionManager:
+    """Управление запросами на подтверждение выполнения заданий"""
+
+    @staticmethod
+    async def create_request(task_id: str, user_id: int) -> int:
+        """Создаёт запрос на подтверждение, возвращает ID запроса"""
+        async with Database._pool.acquire() as conn:
+            # Проверим, нет ли уже активного запроса
+            existing = await conn.fetchval('''
+                SELECT id FROM completion_requests
+                WHERE task_id = $1 AND user_id = $2 AND status = 'pending'
+            ''', task_id, user_id)
+            if existing:
+                return existing
+
+            row = await conn.fetchrow('''
+                INSERT INTO completion_requests (task_id, user_id)
+                VALUES ($1, $2)
+                RETURNING id
+            ''', task_id, user_id)
+            return row['id']
+
+    @staticmethod
+    async def get_pending_requests() -> List[dict]:
+        """Возвращает все необработанные запросы с информацией о задании и пользователе"""
+        async with Database._pool.acquire() as conn:
+            rows = await conn.fetch('''
+                SELECT r.*,
+                       t.title as task_title, t.reward,
+                       u.username, u.first_name
+                FROM completion_requests r
+                JOIN tasks t ON r.task_id = t.task_id
+                JOIN users u ON r.user_id = u.user_id
+                WHERE r.status = 'pending'
+                ORDER BY r.request_date ASC
+            ''')
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    async def get_request(request_id: int) -> Optional[dict]:
+        async with Database._pool.acquire() as conn:
+            row = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1', request_id)
+            return dict(row) if row else None
+
+    @staticmethod
+    async def approve_request(request_id: int, admin_id: int) -> bool:
+        """Подтверждает выполнение, возвращает True если успешно"""
+        async with Database.transaction() as conn:
+            req = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1 FOR UPDATE', request_id)
+            if not req or req['status'] != 'pending':
+                return False
+
+            # Обновляем статус запроса
+            await conn.execute('''
+                UPDATE completion_requests
+                SET status = 'approved', admin_id = $2, processed_date = NOW()
+                WHERE id = $1
+            ''', request_id, admin_id)
+
+            # Вызываем завершение задания (поля proof нет, передаём пустую строку)
+            task_id = req['task_id']
+            user_id = req['user_id']
+
+            # Проверим, не завершено ли уже задание (на всякий случай)
+            task = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1', task_id)
+            if task and not task.get('completed'):
+                # Обновляем задание
+                await conn.execute('''
+                    UPDATE tasks
+                    SET completed = TRUE, completed_date = NOW(), active = FALSE
+                    WHERE task_id = $1
+                ''', task_id)
+
+                # Обновляем user_tasks
+                await conn.execute('''
+                    UPDATE user_tasks
+                    SET status = 'completed', completed_date = NOW(), earned = $2
+                    WHERE user_id = $3 AND task_id = $1
+                ''', task_id, task['reward'], user_id)
+
+                # Обновляем пользователя
+                await conn.execute('''
+                    UPDATE users
+                    SET total_earned = total_earned + $2, completed_tasks = completed_tasks + 1
+                    WHERE user_id = $1
+                ''', user_id, task['reward'])
+
+                # Обновляем статистику
+                await conn.execute('''
+                    INSERT INTO stats (date, tasks_completed, total_payout)
+                    VALUES (CURRENT_DATE, 1, $1)
+                    ON CONFLICT (date) DO UPDATE SET
+                        tasks_completed = stats.tasks_completed + 1,
+                        total_payout = stats.total_payout + $1
+                ''', task['reward'])
+
+            return True
+
+    @staticmethod
+    async def reject_request(request_id: int, admin_id: int) -> bool:
+        """Отклоняет запрос"""
+        async with Database._pool.acquire() as conn:
+            result = await conn.execute('''
+                UPDATE completion_requests
+                SET status = 'rejected', admin_id = $2, processed_date = NOW()
+                WHERE id = $1 AND status = 'pending'
+            ''', request_id, admin_id)
+            return result == "UPDATE 1"
