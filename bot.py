@@ -931,12 +931,16 @@ async def create_task_finish(update, context):
                 await update.edit_message_text(error_msg)
             return
 
-        created_by = update.effective_user.id
-
+        if isinstance(update, Update):
+            created_by = update.effective_user.id
+        else:
+            # Для CallbackQuery используем from_user
+            created_by = update.from_user.id
+        
         task_id = await TaskManager.create(
-            title, desc, task_type, target, float(reward),
-            created_by, cat_id, req
-        )
+                    title, desc, task_type, target, float(reward),
+                    created_by, cat_id, req
+                )
 
         logger.info(f"✅ Задание {task_id} создано")
 
