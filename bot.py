@@ -33,7 +33,7 @@ BOT_USERNAME = os.environ.get('BOT_USERNAME', 'TrafficWorkeee_bot')
 TOPIC_LINKS = 25      # для сообщений "ждут ссылку"
 TOPIC_QUESTIONS = 27  # для вопросов пользователей
 TOPIC_COMPLETED = 29  # для подтверждения выполненных заданий
-
+REPORT_GROUP = 45
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -1626,53 +1626,125 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif data == "admin_create_task":
             await create_task_start(update, context)
 
-# ==================== ОБРАБОТЧИК ПОЛУЧЕНИЯ ДАННЫХ КАРТЫ ====================
 async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Перехватывает сообщения (текст или фото) от пользователей, ожидающих отправки данных карты."""
     user_id = update.effective_user.id
+    logger.info(f"Получено сообщение от пользователя {user_id} в ожидании данных карты")
+    
     awaiting = await PaymentAwaitingManager.get_by_user(user_id)
     if not awaiting:
-        return  # не ждём данные – игнорируем
+        logger.info(f"Пользователь {user_id} не в ожидании данных карты, игнорируем")
+        return
 
     task_id = awaiting['task_id']
     request_id = awaiting['request_id']
+    
+    logger.info(f"Пользователь {user_id} ожидает отправки данных для задания {task_id}, запрос {request_id}")
+
+    # Получаем информацию о задании
+    task = await TaskManager.get_by_id(task_id)
+    if not task:
+        logger.error(f"Задание {task_id} не найдено")
+        await update.message.reply_text("❌ Ошибка: задание не найдено. Обратитесь в поддержку.")
+        return
+
+    # Получаем ID группы отчётов
+    report_group_id = REPORT_GROUP
+    if REPORT_GROUP.startswith('@'):
+        try:
+            chat = await context.bot.get_chat(REPORT_GROUP)
+            report_group_id = chat.id
+            logger.info(f"Получен ID группы отчётов: {report_group_id}")
+        except Exception as e:
+            logger.error(f"Не удалось получить ID группы {REPORT_GROUP}: {e}")
 
     # Пересылаем сообщение в группу отчётов
     try:
-        await context.bot.forward_message(
-            chat_id=REPORT_GROUP,
+        logger.info(f"Попытка пересылки сообщения {update.message.message_id} в группу {report_group_id}")
+        
+        # Пересылаем само сообщение
+        forwarded = await context.bot.forward_message(
+            chat_id=report_group_id,
             from_chat_id=update.effective_chat.id,
             message_id=update.message.message_id
         )
-        # Дополнительная информация о задании
+        logger.info(f"✅ Сообщение переслано, ID пересланного: {forwarded.message_id}")
+        
+        # Отправляем дополнительную информацию о задании
+        info_text = (
+            f"📌 <b>Данные карты для задания</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Пользователь:</b>\n"
+            f"  • ID: <code>{user_id}</code>\n"
+            f"  • Username: @{update.effective_user.username or 'нет'}\n"
+            f"  • Имя: {update.effective_user.first_name}\n\n"
+            f"📋 <b>Задание:</b>\n"
+            f"  • Название: {task['title']}\n"
+            f"  • ID: <code>{task_id}</code>\n"
+            f"  • Награда: {task['reward']} ₽\n"
+            f"  • Запрос ID: {request_id}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━"
+        )
+        
         await context.bot.send_message(
-            REPORT_GROUP,
-            f"📌 <b>Данные карты для задания:</b>\n"
-            f"• Пользователь: @{update.effective_user.username or 'нет'} (ID: {user_id})\n"
-            f"• Задание ID: <code>{task_id}</code>\n"
-            f"• Запрос ID: {request_id}",
+            chat_id=report_group_id,
+            text=info_text,
             parse_mode=ParseMode.HTML
         )
+        logger.info("✅ Информация о задании отправлена в группу отчётов")
+        
     except Exception as e:
-        logger.error(f"Не удалось переслать данные карты в группу отчётов: {e}")
-        await update.message.reply_text("❌ Ошибка при отправке данных. Попробуйте позже.")
+        logger.error(f"❌ Ошибка при пересылке в группу отчётов: {e}")
+        logger.exception("Полный стек ошибки:")
+        
+        # Пробуем отправить напрямую администраторам
+        admins = await AdminManager.get_all_admins()
+        for admin in admins:
+            try:
+                await context.bot.forward_message(
+                    chat_id=admin['user_id'],
+                    from_chat_id=update.effective_chat.id,
+                    message_id=update.message.message_id
+                )
+                await context.bot.send_message(
+                    admin['user_id'],
+                    f"⚠️ <b>Данные карты от пользователя</b> (группа отчётов недоступна)\n"
+                    f"👤 User ID: {user_id}\n"
+                    f"📋 Задание: {task['title']} ({task_id})\n"
+                    f"💰 Награда: {task['reward']} ₽",
+                    parse_mode=ParseMode.HTML
+                )
+                logger.info(f"✅ Данные отправлены администратору {admin['user_id']}")
+                break
+            except Exception as e2:
+                logger.error(f"Не удалось отправить администратору {admin['user_id']}: {e2}")
+        
+        await update.message.reply_text(
+            "❌ Не удалось отправить данные в группу отчётов. "
+            "Администраторы уведомлены, они свяжутся с вами в ближайшее время."
+        )
         return
 
     # Завершаем задание
+    logger.info(f"Попытка завершения задания {task_id} для пользователя {user_id}")
     success = await TaskManager.complete(task_id, user_id, proof="payment_data_sent")
+    
     if not success:
-        logger.error(f"Не удалось завершить задание {task_id} для пользователя {user_id}")
-        await update.message.reply_text("❌ Не удалось завершить задание. Обратитесь в поддержку.")
+        logger.error(f"❌ Не удалось завершить задание {task_id} для пользователя {user_id}")
+        await update.message.reply_text(
+            "⚠️ Данные отправлены, но произошла ошибка при завершении задания. "
+            "Администратор проверит и завершит задание вручную."
+        )
         return
 
     # Помечаем запись как выполненную
     await PaymentAwaitingManager.mark_completed(awaiting['id'])
+    logger.info(f"✅ Задание {task_id} успешно завершено для пользователя {user_id}")
 
     await update.message.reply_text(
         "✅ Спасибо! Ваши данные получены. Задание успешно завершено, награда зачислена.\n"
         "Вы можете проверить свой профиль командой /profile."
     )
-
 # ==================== КОМАНДЫ ====================
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_main_admin(update.effective_user.id):
