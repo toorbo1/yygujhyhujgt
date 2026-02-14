@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import urllib.parse
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
@@ -184,34 +185,36 @@ async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+import urllib.parse  # добавьте в начало файла
+
 async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     tasks_list = await TaskManager.get_user_tasks(user_id)
     if not tasks_list:
-        if update.message:
-            await update.message.reply_text("📭 У вас пока нет взятых заданий.")
-        else:
-            await update.callback_query.message.reply_text("📭 У вас пока нет взятых заданий.")
+        await context.bot.send_message(chat_id, "📭 У вас пока нет взятых заданий.")
         return
 
-    text = "📋 <b>Ваши задания</b>\n\n"
-    for task in tasks_list[:5]:
+    for task in tasks_list:
         status_emoji = "✅" if task.get('completed', False) else "⏳"
-        text += f"{status_emoji} <b>{task['title']}</b>\n"
-        text += f"ID: <code>{task['task_id']}</code>\n"
-        text += f"Статус: {'Выполнено' if task.get('completed', False) else 'В работе'}\n"
+        text = (
+            f"{status_emoji} <b>{task['title']}</b>\n"
+            f"ID: <code>{task['task_id']}</code>\n"
+            f"Статус: {'Выполнено' if task.get('completed', False) else 'В работе'}\n"
+        )
         if task.get('earned'):
             text += f"Заработано: {task['earned']} ₽\n"
-        text += "\n"
-
-    if len(tasks_list) > 5:
-        text += f"<i>... и еще {len(tasks_list) - 5} заданий</i>\n"
-
-    if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-    else:
-        await update.callback_query.message.reply_text(text, parse_mode=ParseMode.HTML)
-
+        
+        keyboard = []
+        if not task.get('completed', False):
+            # Формируем сообщение для поддержки
+            support_msg = f"я сделал задание: {task['title']} (ID: {task['task_id']})"
+            encoded_msg = urllib.parse.quote(support_msg)
+            url = f"https://t.me/V2SHOP123?text={encoded_msg}"
+            keyboard.append([InlineKeyboardButton("✅ Сделал задание", url=url)])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 # ==================== АДМИН-ПАНЕЛЬ ====================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1009,8 +1012,7 @@ async def give_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔗 <b>Вам выдана рабочая ссылка!</b>\n\n"
             f"📋 <b>Задание:</b> {pending['task_title']}\n"
             f"🔗 <b>Рабочая ссылка:</b>\n{work_link}\n\n"
-            f"📊 <b>Ваша персональная ссылка для приглашений:</b>\n"
-            f"{pending['tracking_link']}\n\n"
+            f"После выполнения задания впишите команду /my_tasks чтобы подтвердить выполнение задания\n\n"
             f"Удачи в работе! 🚀",
             parse_mode=ParseMode.HTML
         )
@@ -1235,8 +1237,7 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"✅ <b>Вы взяли задание!</b>\n\n"
         f"📋 <b>Задание:</b> {task['title']}\n"
         f"💰 <b>Награда:</b> {task['reward']} ₽\n\n"
-        f"🔗 <b>Ваша персональная ссылка для приглашений:</b>\n"
-        f"<code>{tracking_link}</code>\n\n"
+        
         f"⏳ <b>Что дальше?</b>\n"
         f"1️⃣ Ожидайте, администратор выдаст рабочую ссылку\n"
         f"2️⃣ Вы получите уведомление, когда ссылка будет готова\n"
