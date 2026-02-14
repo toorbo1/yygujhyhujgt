@@ -4,7 +4,6 @@ import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ConversationHandler, filters, ContextTypes
@@ -18,7 +17,9 @@ from database import (
     Database, UserManager, AdminManager, CategoryManager,
     TaskManager, TrackingManager, PendingManager, StatsManager
 )
+
 WELCOME_VIDEO_PATH = os.path.join(os.path.dirname(__file__), "video.mp4")
+
 # ==================== НАСТРОЙКИ ====================
 TOKEN = os.environ.get('BOT_TOKEN')
 MAIN_ADMIN_ID = int(os.environ.get('MAIN_ADMIN_ID', '8358009538'))
@@ -85,19 +86,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin:
         keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data="admin_panel")])
 
-    # Открываем локальный видео-файл и отправляем как анимацию
-    with open(WELCOME_VIDEO_PATH, 'rb') as video_file:
+    try:
+        with open(WELCOME_VIDEO_PATH, 'rb') as video_file:
+            if update.message:
+                await update.message.reply_animation(
+                    animation=InputFile(video_file, filename='video.mp4'),
+                    caption=welcome_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await update.callback_query.message.reply_animation(
+                    animation=InputFile(video_file, filename='video.mp4'),
+                    caption=welcome_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode=ParseMode.HTML
+                )
+    except Exception as e:
+        logger.error(f"Ошибка при отправке видео: {e}")
         if update.message:
-            await update.message.reply_animation(
-                animation=InputFile(video_file, filename='video.mp4'),
-                caption=welcome_text,
+            await update.message.reply_text(
+                welcome_text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.HTML
             )
         else:
-            await update.callback_query.message.reply_animation(
-                animation=InputFile(video_file, filename='video.mp4'),
-                caption=welcome_text,
+            await update.callback_query.message.reply_text(
+                welcome_text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.HTML
             )
@@ -199,7 +214,13 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== АДМИН-ПАНЕЛЬ ====================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await AdminManager.is_admin(update.effective_user.id):
+    user_id = update.effective_user.id
+    logger.info(f"Попытка открыть админ-панель пользователем {user_id}")
+    
+    is_admin = await AdminManager.is_admin(user_id)
+    logger.info(f"Результат проверки is_admin: {is_admin}")
+    
+    if not is_admin:
         if update.callback_query:
             await update.callback_query.answer("⛔ У вас нет прав администратора!", show_alert=True)
         return
@@ -207,7 +228,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    is_main = await AdminManager.is_main_admin(update.effective_user.id)
+    is_main = await AdminManager.is_main_admin(user_id)
+    logger.info(f"Результат проверки is_main_admin: {is_main}")
 
     keyboard = [
         [InlineKeyboardButton("📋 Управление заданиями", callback_data="admin_tasks_menu")],
@@ -407,6 +429,8 @@ async def list_admins_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # ==================== УПРАВЛЕНИЕ КАТЕГОРИЯМИ ====================
 async def categories_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer("⛔ У вас нет прав администратора!", show_alert=True)
         return
 
     query = update.callback_query
@@ -588,6 +612,8 @@ async def delete_category_callback(update: Update, context: ContextTypes.DEFAULT
 # ==================== УПРАВЛЕНИЕ ЗАДАНИЯМИ ====================
 async def tasks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer("⛔ У вас нет прав администратора!", show_alert=True)
         return
 
     query = update.callback_query
@@ -977,6 +1003,7 @@ async def give_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pending_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
+        await update.callback_query.answer("⛔ У вас нет прав администратора!", show_alert=True)
         return
 
     query = update.callback_query
@@ -1022,6 +1049,7 @@ async def pending_list_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_admin(update.effective_user.id):
+        await update.callback_query.answer("⛔ У вас нет прав администратора!", show_alert=True)
         return
 
     query = update.callback_query
@@ -1228,6 +1256,7 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     logger.info(f"Нажата кнопка: {data}")
 
+    # Пользовательские кнопки
     if data == "back_main":
         await start(update, context)
     elif data == "user_profile":
@@ -1245,7 +1274,8 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await show_tasks(update, context, category_id=cat_id)
     elif data.startswith("take_"):
         await take_task_callback(update, context)
-    elif data.startswith("admin_"):  # Все админские кнопки начинаются с admin_
+    # Админские кнопки
+    elif data.startswith("admin_"):
         # Проверяем права администратора
         if not await AdminManager.is_admin(update.effective_user.id):
             await query.answer("⛔ У вас нет прав администратора!", show_alert=True)
@@ -1277,6 +1307,7 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await delete_category_callback(update, context)
         elif data == "admin_create_task":
             await create_task_start(update, context)
+
 # ==================== КОМАНДЫ ====================
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await AdminManager.is_main_admin(update.effective_user.id):
@@ -1360,17 +1391,20 @@ def main():
     application = Application.builder().token(TOKEN).post_init(post_init).build()
     application.post_shutdown = shutdown
 
+    # Пользовательские команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("profile", profile))
     application.add_handler(CommandHandler("tasks", tasks))
     application.add_handler(CommandHandler("my_tasks", my_tasks))
 
+    # Админские команды
     application.add_handler(CommandHandler("add_admin", add_admin_command))
     application.add_handler(CommandHandler("remove_admin", remove_admin_command))
     application.add_handler(CommandHandler("give_link", give_link_command))
     application.add_handler(CommandHandler("check_tasks", check_tasks_command))
 
+    # ConversationHandler для добавления админа
     conv_add_admin = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_admin_start, pattern="^admin_add_admin_start$")],
         states={
@@ -1382,6 +1416,7 @@ def main():
     )
     application.add_handler(conv_add_admin)
 
+    # ConversationHandler для добавления категории
     conv_add_category = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_category_start, pattern="^admin_add_category$")],
         states={
@@ -1393,6 +1428,7 @@ def main():
     )
     application.add_handler(conv_add_category)
 
+    # ConversationHandler для создания задания
     conv_create_task = ConversationHandler(
         entry_points=[
             CommandHandler("create_task", create_task_start),
@@ -1412,7 +1448,10 @@ def main():
     )
     application.add_handler(conv_create_task)
 
+    # Главный обработчик кнопок
     application.add_handler(CallbackQueryHandler(main_button_handler))
+    
+    # Обработчик ошибок
     application.add_error_handler(error_handler)
 
     logger.info("🚀 Запуск бота...")
