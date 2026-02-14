@@ -1829,7 +1829,7 @@ def main():
 
     # ConversationHandler для вопросов
     conv_ask_question = ConversationHandler(
-        entry_points=[CallbackQueryHandler(ask_question_start, pattern="^ask_question$")],
+        entry_points=[CallbackQueryHandler( ask_question_start, pattern="^ask_question$")],
         states={
             ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_question_text)],
         },
