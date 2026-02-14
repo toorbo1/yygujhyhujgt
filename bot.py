@@ -999,8 +999,8 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
     # Создаём запрос на подтверждение
     request_id = await CompletionManager.create_request(task_id, user_id)
 
-    # Отправляем уведомление администраторам (в группу или главному админу)
-    admin_chat = TASK_NOTIFICATION_GROUP  # или можно MAIN_ADMIN_ID
+    # Отправляем уведомление администраторам
+    admin_chat = TASK_NOTIFICATION_GROUP
     user = await UserManager.get(user_id)
     text = (
         f"🔔 <b>Запрос на подтверждение выполнения</b>\n\n"
@@ -1674,6 +1674,7 @@ def main():
     application.add_handler(CommandHandler("remove_admin", remove_admin_command))
     application.add_handler(CommandHandler("give_link", give_link_command))
     application.add_handler(CommandHandler("check_tasks", check_tasks_command))
+    application.add_handler(CommandHandler("pending_completions", pending_completions_command))
 
     # Команды для главного админа
     application.add_handler(CommandHandler("users_count", users_count_command))
@@ -1735,57 +1736,9 @@ def main():
     )
     application.add_handler(conv_create_task)
 
-    # Главный обработчик кнопок
-    application.add_handler(CallbackQueryHandler(main_button_handler))
-    
-    # Обработчик ошибок
-    application.add_error_handler(error_handler)
-    # ========== СПЕЦИФИЧНЫЕ ОБРАБОТЧИКИ ==========
-    # Эти обработчики должны быть ДО main_button_handler!
-    
-    # Для отладки - временный принт
-    print("✅ Регистрирую обработчики complete_, approve_, reject_")
-    
-    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_"))
-    application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_"))
-    application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_"))
-    
-    # Команда для просмотра ожидающих запросов
-    application.add_handler(CommandHandler("pending_completions", pending_completions_command))
-
-    # Главный обработчик (ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ!)
-    application.add_handler(CallbackQueryHandler(main_button_handler))
-    
-    application.add_error_handler(error_handler)
-
-    logger.info("🚀 Запуск бота...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-    logger.info("🚀 Запуск бота...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-    # ConversationHandler для создания задания
-    conv_create_task = ConversationHandler(
-        entry_points=[
-            CommandHandler("create_task", create_task_start),
-            CallbackQueryHandler(create_task_start, pattern="^admin_create_task$")
-        ],
-        states={
-            TASK_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_title)],
-            TASK_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_desc)],
-            TASK_TYPE: [CallbackQueryHandler(create_task_type_callback, pattern="^task_type_")],
-            TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_target)],
-            REWARD: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_reward)],
-            REQUIREMENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_task_requirements)],
-            TASK_CATEGORY: [CallbackQueryHandler(create_task_category_callback, pattern="^task_cat_")],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        name="create_task_conv"
-    )
-    application.add_handler(conv_create_task)
-
-    # ========== СПЕЦИФИЧНЫЕ ОБРАБОТЧИКИ CALLBACK ==========
-    # (должны быть до общего обработчика!)
+    # ========== ВАЖНО: СПЕЦИФИЧНЫЕ ОБРАБОТЧИКИ CALLBACK ==========
+    # Эти обработчики должны быть зарегистрированы ДО main_button_handler
+    # и иметь более конкретные паттерны
     
     # Обработчик кнопки "Я выполнил задание" для пользователей
     application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_"))
@@ -1793,12 +1746,9 @@ def main():
     # Обработчики для админских кнопок подтверждения/отклонения
     application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_"))
     application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_"))
-    
-    # Команда для просмотра ожидающих запросов (для админов)
-    application.add_handler(CommandHandler("pending_completions", pending_completions_command))
 
     # ========== ГЛАВНЫЙ ОБРАБОТЧИК КНОПОК ==========
-    # (обрабатывает все остальные callback'и)
+    # Этот обработчик должен быть ПОСЛЕДНИМ, так как он обрабатывает все остальные паттерны
     application.add_handler(CallbackQueryHandler(main_button_handler))
     
     # ========== ОБРАБОТЧИК ОШИБОК ==========
@@ -1806,6 +1756,7 @@ def main():
 
     logger.info("🚀 Запуск бота...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
 if __name__ == "__main__":
-    
     main()
