@@ -170,9 +170,7 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Имя: {user['first_name']}\n"
         f"Username: @{user['username'] if user['username'] else 'нет'}\n"
         f"Дата регистрации: {joined_date}\n"
-        f"Администратор: {'✅ Да' if user.get('is_admin') else '❌ Нет'}\n\n"
         f"📊 <b>Статистика</b>\n"
-        f"✅ Выполнено заданий: {stats['completed_count']}\n"
         f"⚡ Активных заданий: {stats['active_count']}\n"
     )
     if update.message:
@@ -2040,12 +2038,8 @@ async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 Имя: {user['first_name']}\n"
         f"📧 Username: @{user['username'] if user['username'] else 'нет'}\n"
         f"📅 Дата регистрации: {joined_date}\n"
-        f"👑 Администратор: {'✅ Да' if user.get('is_admin') else '❌ Нет'}\n\n"
         f"📊 <b>Статистика</b>\n"
-        f"✅ Выполнено заданий: {stats['completed_count']}\n"
         f"⚡ Активных заданий: {stats['active_count']}\n"
-        f"💰 Всего заработано: {stats['total_earned']} ₽\n"
-        f"⭐ Рейтинг: {stats['rating']}"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
