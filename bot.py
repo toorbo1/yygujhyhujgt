@@ -1116,6 +1116,10 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
         if ut['status'] == 'completed':
             await query.edit_message_text("✅ Это задание уже выполнено и подтверждено.")
             return
+        # Добавим проверку на ожидание оплаты
+        if ut['status'] == 'awaiting_payment':
+            await query.edit_message_text("⏳ Задание ожидает подтверждения оплаты.")
+            return
 
     request_id = await CompletionManager.create_request(task_id, user_id)
 
@@ -1181,11 +1185,17 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         return
 
     async with Database.transaction() as conn:
-        # Обновляем статус запроса
-        await conn.execute(
-            'UPDATE completion_requests SET status = $1, admin_id = $2, processed_date = NOW() WHERE id = $3',
-            'approved', admin_id, request_id
-        )
+    # Обновляем статус запроса
+         await conn.execute(
+             'UPDATE completion_requests SET status = $1, admin_id = $2, processed_date = NOW() WHERE id = $3',
+             'approved', admin_id, request_id
+         )
+         
+         # Обновляем статус в user_tasks на "ожидает оплаты"
+         await conn.execute(
+             'UPDATE user_tasks SET status = $1 WHERE user_id = $2 AND task_id = $3',
+             'awaiting_payment', req['user_id'], req['task_id']
+         )
         
         # Обновляем статус в user_tasks на "ожидает оплаты" или оставляем как есть
         # Но пока не завершаем задание полностью
@@ -1931,7 +1941,9 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"❌ Ошибка при пересылке в группу отчётов: {e}")
         logger.exception("Полный стек ошибки:")
         
+        # Отправка администраторам в ЛС как запасной вариант
         admins = await AdminManager.get_all_admins()
+        sent = False
         for admin in admins:
             try:
                 await context.bot.forward_message(
@@ -1948,31 +1960,77 @@ async def handle_payment_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                     parse_mode=ParseMode.HTML
                 )
                 logger.info(f"✅ Данные отправлены администратору {admin['user_id']}")
+                sent = True
                 break
             except Exception as e2:
                 logger.error(f"Не удалось отправить администратору {admin['user_id']}: {e2}")
         
-        await update.message.reply_text(
-            "❌ Не удалось отправить данные в группу отчётов. "
-            "Администраторы уведомлены, они свяжутся с вами в ближайшее время."
-        )
-        return
+        if not sent:
+            await update.message.reply_text(
+                "❌ Не удалось отправить данные в группу отчётов. "
+                "Пожалуйста, обратитесь в поддержку."
+            )
+            return
 
     # ЗАВЕРШАЕМ ЗАДАНИЕ ПОСЛЕ ПОЛУЧЕНИЯ ДАННЫХ КАРТЫ
     logger.info(f"Попытка завершения задания {task_id} для пользователя {user_id}")
-    success = await TaskManager.complete(task_id, user_id, proof="payment_data_sent")
     
-    if not success:
-        logger.error(f"❌ Не удалось завершить задание {task_id} для пользователя {user_id}")
-        await update.message.reply_text(
-            "⚠️ Данные отправлены, но произошла ошибка при завершении задания. "
-            "Администратор проверит и завершит задание вручную."
+    # Используем транзакцию для завершения задания
+    async with Database.transaction() as conn:
+        # Проверяем, не завершено ли уже задание
+        task_check = await conn.fetchrow(
+            'SELECT completed FROM tasks WHERE task_id = $1',
+            task_id
         )
-        return
+        
+        if task_check and task_check['completed']:
+            logger.info(f"Задание {task_id} уже завершено")
+            await update.message.reply_text(
+                "✅ Задание уже было завершено ранее. Спасибо!"
+            )
+            await PaymentAwaitingManager.mark_completed(awaiting['id'])
+            return
+        
+        # Завершаем задание
+        await conn.execute('''
+            UPDATE tasks 
+            SET completed = TRUE, 
+                completed_date = NOW(), 
+                active = FALSE,
+                proof = $2
+            WHERE task_id = $1
+        ''', task_id, "payment_data_sent")
+        
+        # Обновляем user_tasks
+        await conn.execute('''
+            UPDATE user_tasks 
+            SET status = 'completed', 
+                completed_date = NOW(), 
+                earned = $2
+            WHERE user_id = $3 AND task_id = $1
+        ''', task_id, task['reward'], user_id)
+        
+        # Обновляем пользователя
+        await conn.execute('''
+            UPDATE users 
+            SET total_earned = total_earned + $2, 
+                completed_tasks = completed_tasks + 1 
+            WHERE user_id = $1
+        ''', user_id, task['reward'])
+        
+        # Обновляем статистику
+        await conn.execute('''
+            INSERT INTO stats (date, tasks_completed, total_payout) 
+            VALUES (CURRENT_DATE, 1, $1)
+            ON CONFLICT (date) DO UPDATE SET 
+                tasks_completed = stats.tasks_completed + 1,
+                total_payout = stats.total_payout + $1
+        ''', task['reward'])
+    
+    logger.info(f"✅ Задание {task_id} успешно завершено для пользователя {user_id}")
 
     # Отмечаем запись в payment_awaiting как выполненную
     await PaymentAwaitingManager.mark_completed(awaiting['id'])
-    logger.info(f"✅ Задание {task_id} успешно завершено для пользователя {user_id}")
 
     await update.message.reply_text(
         "✅ Спасибо! Ваши данные получены. Задание успешно завершено, награда зачислена.\n"
