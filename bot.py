@@ -2038,9 +2038,34 @@ def main():
     application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
     application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_\\d+$"))
     application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_\\d+$"))
-    application.add_handler(CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$"))
 
     # ========== 2. ПОТОМ ДИАЛОГИ ==========
+    
+    # Диалог для вопросов от пользователей
+    ask_question_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(ask_question_start, pattern="^ask_question$")],
+        states={
+            ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_question_text)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        name="ask_question_conv",
+        allow_reentry=True
+    )
+    application.add_handler(ask_question_conv)
+
+    # Диалог для ответов администратора (НОВЫЙ И ВАЖНЫЙ!)
+    admin_reply_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$")],
+        states={
+            ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_reply)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        name="admin_reply_conv",
+        allow_reentry=True
+    )
+    application.add_handler(admin_reply_conv)
+
+    # Диалог рассылки
     broadcast_conv = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_start)],
         states={
@@ -2051,6 +2076,7 @@ def main():
     )
     application.add_handler(broadcast_conv)
 
+    # Диалог удаления задания у пользователя
     remove_task_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(remove_user_task_start, pattern="^admin_remove_user_task_start$")],
         states={
@@ -2062,6 +2088,7 @@ def main():
     )
     application.add_handler(remove_task_conv)
 
+    # Диалог добавления администратора
     conv_add_admin = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_admin_start, pattern="^admin_add_admin_start$")],
         states={
@@ -2073,6 +2100,7 @@ def main():
     )
     application.add_handler(conv_add_admin)
 
+    # Диалог добавления категории
     conv_add_category = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_category_start, pattern="^admin_add_category$")],
         states={
@@ -2084,6 +2112,7 @@ def main():
     )
     application.add_handler(conv_add_category)
 
+    # Диалог создания задания
     conv_create_task = ConversationHandler(
         entry_points=[
             CommandHandler("create_task", create_task_start),
@@ -2103,29 +2132,6 @@ def main():
     )
     application.add_handler(conv_create_task)
 
-    ask_question_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(ask_question_start, pattern="^ask_question$"),
-        ],
-        states={
-            ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_question_text)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        name="ask_question_conv"
-    )
-    application.add_handler(ask_question_conv)
-# После ask_question_conv добавьте:
-
-    admin_reply_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$")],
-        states={
-            ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_reply)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        name="admin_reply_conv",
-        allow_reentry=True
-    )
-    application.add_handler(admin_reply_conv)
     # ========== 3. ПОТОМ КОМАНДЫ ==========
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
