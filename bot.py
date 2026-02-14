@@ -1160,6 +1160,7 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
 async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.info(f"✅ approve_request_callback вызван с data: {query.data}")
+    logger.info(f"Admin {admin_id} нажал 'Подтвердить'")
     await query.answer()
     admin_id = update.effective_user.id
     logger.info(f"Admin {admin_id} нажал 'Подтвердить'")
@@ -1221,6 +1222,7 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
 async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.info(f"❌ reject_request_callback вызван с data: {query.data}")
+    logger.info(f"Admin {admin_id} нажал 'Отклонить'")
     await query.answer()
     admin_id = update.effective_user.id
     logger.info(f"Admin {admin_id} нажал 'Отклонить'")
