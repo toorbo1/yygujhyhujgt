@@ -2155,7 +2155,7 @@ def main():
     application.add_handler(MessageHandler(filters.PHOTO, handle_payment_data))
 
     # ========== 6. ОБРАБОТЧИК ОШИБОК ==========
-    application.add_error_handler(error_handler)
+    application.add_error_handler(error_handler )
 
     logger.info("🚀 Запуск бота...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
