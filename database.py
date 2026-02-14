@@ -469,22 +469,22 @@ class TaskManager:
             ''', task['reward'])
             return True
 
-@staticmethod
-async def get_user_tasks(user_id: int, status: Optional[str] = None) -> List[dict]:
-    async with Database._pool.acquire() as conn:
-        query = '''
-            SELECT t.*, ut.status, ut.taken_date, ut.earned 
-            FROM tasks t
-            JOIN user_tasks ut ON t.task_id = ut.task_id
-            WHERE ut.user_id = $1
-        '''
-        args = [user_id]
-        if status:
-            query += " AND ut.status = $2"
-            args.append(status)
-        query += " ORDER BY ut.taken_date DESC"
-        rows = await conn.fetch(query, *args)
-        return [dict(r) for r in rows]
+    @staticmethod
+    async def get_user_tasks(user_id: int, status: Optional[str] = None) -> List[dict]:
+        async with Database._pool.acquire() as conn:
+            query = '''
+                SELECT t.*, ut.status, ut.taken_date, ut.earned 
+                FROM tasks t
+                JOIN user_tasks ut ON t.task_id = ut.task_id
+                WHERE ut.user_id = $1
+            '''
+            args = [user_id]
+            if status:
+                query += " AND ut.status = $2"
+                args.append(status)
+            query += " ORDER BY ut.taken_date DESC"
+            rows = await conn.fetch(query, *args)
+            return [dict(r) for r in rows]
 
     @staticmethod
     async def get_pending_links() -> List[dict]:
