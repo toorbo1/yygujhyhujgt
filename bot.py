@@ -24,7 +24,7 @@ WELCOME_VIDEO_PATH = os.path.join(os.path.dirname(__file__), "video.mp4")
 
 # ==================== НАСТРОЙКИ ====================
 TOKEN = os.environ.get('BOT_TOKEN')
-MAIN_ADMIN_ID = int(os.environ.get('MAIN_ADMIN_ID', '8358009538 '))
+MAIN_ADMIN_ID = int(os.environ.get('MAIN_ADMIN_ID', '8358009538'))
 GROUP_ID = int(os.environ.get('GROUP_ID', '-1003768763215'))  # ID группы с префиксом -100
 BOT_USERNAME = os.environ.get('BOT_USERNAME', 'TrafficWorkeee_bot')
 
@@ -1186,20 +1186,17 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         return
 
     async with Database.transaction() as conn:
-    # Обновляем статус запроса
-         await conn.execute(
-             'UPDATE completion_requests SET status = $1, admin_id = $2, processed_date = NOW() WHERE id = $3',
-             'approved', admin_id, request_id
-         )
-         
-         # Обновляем статус в user_tasks на "ожидает оплаты"
-         await conn.execute(
-             'UPDATE user_tasks SET status = $1 WHERE user_id = $2 AND task_id = $3',
-             'awaiting_payment', req['user_id'], req['task_id']
-         )
+        # Обновляем статус запроса
+        await conn.execute(
+            'UPDATE completion_requests SET status = $1, admin_id = $2, processed_date = NOW() WHERE id = $3',
+            'approved', admin_id, request_id
+        )
         
-        # Обновляем статус в user_tasks на "ожидает оплаты" или оставляем как есть
-        # Но пока не завершаем задание полностью
+        # Обновляем статус в user_tasks на "ожидает оплаты"
+        await conn.execute(
+            'UPDATE user_tasks SET status = $1 WHERE user_id = $2 AND task_id = $3',
+            'awaiting_payment', req['user_id'], req['task_id']
+        )
 
     # Добавляем запись в payment_awaiting
     await PaymentAwaitingManager.add(req['user_id'], req['task_id'], request_id)
@@ -1211,7 +1208,7 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
             "✅ <b>Ваше задание было одобрено!</b>\n\n"
             "Пришлите данные вашей карты для пополнения.\n"
             "Вы можете прислать текст или фото карты.\n\n"
-            "<i>После отправки данных задание будет завершено, и награда поступит на ваш счёт.</i>\n\n",
+            "<i>После отправки данных задание будет завершено, и награда поступит на ваш счёт.</i>\n\n"
             "Пример отправки:\nКарта: 0000 0000 0000 0000 \nИмя: Алексей \nБанк: Т-банк",
             parse_mode=ParseMode.HTML
         )
@@ -1220,7 +1217,6 @@ async def approve_request_callback(update: Update, context: ContextTypes.DEFAULT
         logger.error(f"Не удалось отправить запрос данных карты пользователю {req['user_id']}: {e}")
 
     await query.edit_message_text(f"✅ Запрос #{request_id} одобрен. Пользователю отправлен запрос на предоставление данных карты.")
-
 
 async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1830,9 +1826,7 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     await query.answer()
     logger.info(f"Главный обработчик: нажата кнопка {data}")
-        
-    await query.answer()
-    logger.info(f"Главный обработчик: нажата кнопка {data}")
+ 
 
     if data == "back_main":
         await start(update, context)
