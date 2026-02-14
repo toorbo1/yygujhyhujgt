@@ -1785,10 +1785,14 @@ async def broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ГЛАВНЫЙ ОБРАБОТЧИК КНОПОК ====================
 async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     data = query.data
-
-    logger.info(f"Нажата кнопка: {data}")
+    
+    # Проверяем, не обработан ли уже этот callback более конкретным обработчиком
+    if data.startswith(('complete_', 'approve_', 'reject_', 'answer_user_')):
+        return
+        
+    await query.answer()
+    logger.info(f"Главный обработчик: нажата кнопка {data}")
 
     if data == "back_main":
         await start(update, context)
@@ -2028,26 +2032,13 @@ def main():
     application = Application.builder().token(TOKEN).post_init(post_init).build()
     application.post_shutdown = shutdown
 
-    # Пользовательские команды
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("profile", profile))
-    application.add_handler(CommandHandler("tasks", tasks))
-    application.add_handler(CommandHandler("my_tasks", my_tasks))
+    # ========== 1. СНАЧАЛА КОНКРЕТНЫЕ ОБРАБОТЧИКИ ==========
+    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
+    application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_\\d+$"))
+    application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_\\d+$"))
+    application.add_handler(CallbackQueryHandler(answer_user_callback, pattern="^answer_user_\\d+$"))
 
-    # Админские команды
-    application.add_handler(CommandHandler("add_admin", add_admin_command))
-    application.add_handler(CommandHandler("remove_admin", remove_admin_command))
-    application.add_handler(CommandHandler("give_link", give_link_command))
-    application.add_handler(CommandHandler("check_tasks", check_tasks_command))
-    application.add_handler(CommandHandler("pending_completions", pending_completions_command))
-
-    # Команды для главного админа
-    application.add_handler(CommandHandler("users_count", users_count_command))
-    application.add_handler(CommandHandler("user_info", user_info_command))
-    application.add_handler(CommandHandler("users_list", users_list_command))
-
-    # Рассылка
+    # ========== 2. ПОТОМ ДИАЛОГИ ==========
     broadcast_conv = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_start)],
         states={
@@ -2058,7 +2049,6 @@ def main():
     )
     application.add_handler(broadcast_conv)
 
-    # Удаление заданий у пользователей
     remove_task_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(remove_user_task_start, pattern="^admin_remove_user_task_start$")],
         states={
@@ -2070,7 +2060,6 @@ def main():
     )
     application.add_handler(remove_task_conv)
 
-    # Добавление админа
     conv_add_admin = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_admin_start, pattern="^admin_add_admin_start$")],
         states={
@@ -2082,7 +2071,6 @@ def main():
     )
     application.add_handler(conv_add_admin)
 
-    # Добавление категории
     conv_add_category = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_category_start, pattern="^admin_add_category$")],
         states={
@@ -2094,7 +2082,6 @@ def main():
     )
     application.add_handler(conv_add_category)
 
-    # Создание задания
     conv_create_task = ConversationHandler(
         entry_points=[
             CommandHandler("create_task", create_task_start),
@@ -2114,34 +2101,41 @@ def main():
     )
     application.add_handler(conv_create_task)
 
-    # Вопросы и ответы
     ask_question_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(ask_question_start, pattern="^ask_question$"),
-            CallbackQueryHandler(answer_user_callback, pattern="^answer_user_")
         ],
         states={
-            ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_reply)],
+            ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_question_text)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        name="ask_question_conv",
-        allow_reentry=True
+        name="ask_question_conv"
     )
     application.add_handler(ask_question_conv)
 
-    # Специфичные callback-обработчики
-    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
-    application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_\\d+$"))
-    application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_\\d+$"))
+    # ========== 3. ПОТОМ КОМАНДЫ ==========
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("profile", profile))
+    application.add_handler(CommandHandler("tasks", tasks))
+    application.add_handler(CommandHandler("my_tasks", my_tasks))
+    application.add_handler(CommandHandler("add_admin", add_admin_command))
+    application.add_handler(CommandHandler("remove_admin", remove_admin_command))
+    application.add_handler(CommandHandler("give_link", give_link_command))
+    application.add_handler(CommandHandler("check_tasks", check_tasks_command))
+    application.add_handler(CommandHandler("pending_completions", pending_completions_command))
+    application.add_handler(CommandHandler("users_count", users_count_command))
+    application.add_handler(CommandHandler("user_info", user_info_command))
+    application.add_handler(CommandHandler("users_list", users_list_command))
 
-    # Обработчики данных карты
+    # ========== 4. ПОТОМ ОБЩИЙ ОБРАБОТЧИК КНОПОК ==========
+    application.add_handler(CallbackQueryHandler(main_button_handler))
+
+    # ========== 5. ПОТОМ ОБРАБОТЧИКИ СООБЩЕНИЙ ==========
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_payment_data))
     application.add_handler(MessageHandler(filters.PHOTO, handle_payment_data))
 
-    # Главный обработчик кнопок
-    application.add_handler(CallbackQueryHandler(main_button_handler))
-
-    # Обработчик ошибок
+    # ========== 6. ОБРАБОТЧИК ОШИБОК ==========
     application.add_error_handler(error_handler)
 
     logger.info("🚀 Запуск бота...")
