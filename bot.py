@@ -29,6 +29,11 @@ TASK_NOTIFICATION_GROUP = os.environ.get('TASK_NOTIFICATION_GROUP', '@wedferfwew
 REPORT_GROUP = os.environ.get('REPORT_GROUP', '@ertghpjoterg')
 BOT_USERNAME = os.environ.get('BOT_USERNAME', 'TrafficWorkeee_bot')
 
+# ID тем (топиков) в группе (замените на свои значения из пригласительных ссылок)
+TOPIC_LINKS = 25      # для сообщений "ждут ссылку"
+TOPIC_QUESTIONS = 27  # для вопросов пользователей
+TOPIC_COMPLETED = 29  # для подтверждения выполненных заданий
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -39,7 +44,8 @@ logger = logging.getLogger(__name__)
 CATEGORY_NAME, CATEGORY_PARENT = range(2)
 TASK_TITLE, TASK_DESC, TASK_TYPE, TARGET, REWARD, REQUIREMENTS, TASK_CATEGORY = range(7, 14)
 ADD_ADMIN_ID, ADD_ADMIN_USERNAME = range(14, 16)
-BROADCAST_TEXT = 50  # новое состояние для рассылки
+BROADCAST_TEXT = 50
+ASK_QUESTION = 51  # новое состояние для вопроса
 
 # ==================== ОБЩИЕ КОМАНДЫ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,12 +138,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2. Нажми «Взять» — бот создаст твою личную ссылку\n"
         "3. Администратор выдаст рабочую ссылку\n"
         "4. Приводи людей по своей ссылке и зарабатывай\n\n"
-        "Если есть проблема или баг то по всем вопросам: @V2SHOP123"
     )
+    # Добавляем кнопку "Задать вопрос"
+    keyboard = [[InlineKeyboardButton("📝 Задать вопрос", callback_data="ask_question")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     if update.message:
-        await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     else:
-        await update.callback_query.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+        await update.callback_query.message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -207,11 +216,60 @@ async def my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
       
       keyboard = []
       if not task.get('completed', False):
-          # Вместо URL используем callback
           keyboard.append([InlineKeyboardButton("✅ Я выполнил задание", callback_data=f"complete_{task['task_id']}")])
       
       reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
       await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
+# ==================== ОБРАБОТЧИК ВОПРОСОВ ====================
+async def ask_question_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало диалога вопроса"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "📝 <b>Задать вопрос</b>\n\n"
+        "Напишите ваш вопрос. Администратор ответит вам в личные сообщения.\n"
+        "Отправьте /cancel для отмены.",
+        parse_mode=ParseMode.HTML
+    )
+    return ASK_QUESTION
+
+async def ask_question_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение текста вопроса и отправка в тему 'вопросы'"""
+    if update.message.text == '/cancel':
+        await update.message.reply_text("❌ Вопрос отменён.")
+        return ConversationHandler.END
+
+    question = update.message.text
+    user = update.effective_user
+    user_id = user.id
+    username = user.username or "нет username"
+    first_name = user.first_name
+
+    # Формируем сообщение для топика "вопросы"
+    text = (
+        f"❓ <b>Новый вопрос</b>\n\n"
+        f"👤 <b>Пользователь:</b>\n"
+        f"  • ID: <code>{user_id}</code>\n"
+        f"  • Username: @{username}\n"
+        f"  • Имя: {first_name}\n\n"
+        f"📝 <b>Вопрос:</b>\n{question}"
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=TASK_NOTIFICATION_GROUP,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            message_thread_id=TOPIC_QUESTIONS  # отправляем в тему "вопросы"
+        )
+        await update.message.reply_text("✅ Ваш вопрос отправлен администратору. Ожидайте ответа в личные сообщения.")
+    except Exception as e:
+        logger.error(f"Ошибка отправки вопроса в тему: {e}")
+        await update.message.reply_text("❌ Не удалось отправить вопрос. Попробуйте позже.")
+
+    return ConversationHandler.END
+
 # ==================== АДМИН-ПАНЕЛЬ ====================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -978,7 +1036,7 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
     user_id = update.effective_user.id
-    task_id = query.data.split('_')[1]   # complete_taskId
+    task_id = query.data.split('_')[1]
 
     # Проверим, что задание действительно взято этим пользователем и ещё не выполнено
     task = await TaskManager.get_by_id(task_id)
@@ -999,8 +1057,7 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
     # Создаём запрос на подтверждение
     request_id = await CompletionManager.create_request(task_id, user_id)
 
-    # Отправляем уведомление администраторам
-    admin_chat = TASK_NOTIFICATION_GROUP
+    # Отправляем уведомление в тему "сделанные задания" (ID темы: 29)
     user = await UserManager.get(user_id)
     text = (
         f"🔔 <b>Запрос на подтверждение выполнения</b>\n\n"
@@ -1017,10 +1074,15 @@ async def complete_task_callback(update: Update, context: ContextTypes.DEFAULT_T
         ]
     ]
     try:
-        await context.bot.send_message(admin_chat, text, parse_mode=ParseMode.HTML,
-                                       reply_markup=InlineKeyboardMarkup(keyboard))
+        await context.bot.send_message(
+            chat_id=TASK_NOTIFICATION_GROUP,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            message_thread_id=TOPIC_COMPLETED  # отправляем в тему "сделанные задания"
+        )
     except Exception as e:
-        logger.error(f"Не удалось отправить уведомление админу: {e}")
+        logger.error(f"Не удалось отправить уведомление в тему 'сделанные задания': {e}")
         await query.edit_message_text("⚠️ Не удалось отправить запрос администратору. Попробуйте позже.")
         return
 
@@ -1110,6 +1172,7 @@ async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_
         )
     else:
         await query.edit_message_text("❌ Не удалось отклонить запрос.")
+
 async def pending_completions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать список ожидающих подтверждения (для админов)"""
     if not await AdminManager.is_admin(update.effective_user.id):
@@ -1182,7 +1245,8 @@ async def give_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🆔 <b>ID:</b> <code>{task_id}</code>\n"
             f"👤 <b>Пользователь:</b> @{pending['username'] or pending['user_id']}\n"
             f"👨‍💼 <b>Администратор:</b> @{update.effective_user.username or update.effective_user.id}",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            message_thread_id=TOPIC_LINKS  # тоже можно в тему "ссылки"
         )
     except Exception as e:
         logger.error(f"Не удалось отправить подтверждение в группу: {e}")
@@ -1357,6 +1421,7 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         tracking_link
     )
 
+    # Отправляем в тему "ссылки" (ID темы: 25)
     group_chat = TASK_NOTIFICATION_GROUP
     admin_msg = (
         f"🆕 <b>НОВОЕ ЗАДАНИЕ ВЗЯТО!</b>\n\n"
@@ -1378,16 +1443,20 @@ async def take_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
     try:
-        await context.bot.send_message(group_chat, admin_msg, parse_mode=ParseMode.HTML)
-        logger.info(f"✅ Уведомление отправлено в группу {group_chat} для задания {task_id}")
+        await context.bot.send_message(
+            chat_id=group_chat,
+            text=admin_msg,
+            parse_mode=ParseMode.HTML,
+            message_thread_id=TOPIC_LINKS  # отправляем в тему "ссылки"
+        )
+        logger.info(f"✅ Уведомление отправлено в тему 'ссылки' (ID: {TOPIC_LINKS}) для задания {task_id}")
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки в группу {group_chat}: {e}")
+        logger.error(f"❌ Ошибка отправки в тему 'ссылки': {e}")
 
     await query.edit_message_text(
         f"✅ <b>Вы взяли задание!</b>\n\n"
         f"📋 <b>Задание:</b> {task['title']}\n"
         f"💰 <b>Награда:</b> {task['reward']} ₽\n\n"
-        
         f"⏳ <b>Что дальше?</b>\n"
         f"1️⃣ Ожидайте, администратор выдаст рабочую ссылку\n"
         f"2️⃣ Вы получите уведомление, когда ссылка будет готова\n"
@@ -1520,7 +1589,7 @@ async def broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(uid, text, parse_mode=ParseMode.HTML)
             success += 1
-            await asyncio.sleep(0.05)  # задержка, чтобы избежать flood
+            await asyncio.sleep(0.05)
         except Exception as e:
             logger.error(f"Не удалось отправить сообщение пользователю {uid}: {e}")
             failed += 1
@@ -1551,6 +1620,9 @@ async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await tasks(update, context)
     elif data == "user_my_tasks":
         await my_tasks(update, context)
+    elif data == "ask_question":
+        # Запускаем диалог вопроса
+        await ask_question_start(update, context)
     elif data == "all_tasks":
         await show_tasks(update, context, category_id=None)
     elif data.startswith("cat_"):
@@ -1652,14 +1724,13 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message:
             logger.error(f"Message text: {update.message.text}")
 
-    # Пользователю не отправляем сообщение об ошибке, чтобы не показывать "внутренняя ошибка"
-
 # ==================== ЗАПУСК ====================
 async def post_init(application: Application):
     await Database.init_pool()
     logger.info("✅ Бот запущен и готов к работе!")
     logger.info(f"👑 Главный администратор: {MAIN_ADMIN_ID}")
     logger.info(f"📢 Группа уведомлений: {TASK_NOTIFICATION_GROUP}")
+    logger.info(f"📌 Темы: ссылки={TOPIC_LINKS}, вопросы={TOPIC_QUESTIONS}, выполненные={TOPIC_COMPLETED}")
 
 async def shutdown(application: Application):
     await Database.close_pool()
@@ -1747,24 +1818,26 @@ def main():
     )
     application.add_handler(conv_create_task)
 
-    # ========== ВАЖНО: СПЕЦИФИЧНЫЕ ОБРАБОТЧИКИ CALLBACK ==========
-    # Эти обработчики должны быть зарегистрированы с максимально конкретными паттернами
-    # и в правильном порядке
-    
-    # 1. Сначала обработчики для подтверждения/отклонения (самые конкретные)
+    # ConversationHandler для вопросов
+    conv_ask_question = ConversationHandler(
+        entry_points=[CallbackQueryHandler(ask_question_start, pattern="^ask_question$")],
+        states={
+            ASK_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_question_text)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        name="ask_question_conv"
+    )
+    application.add_handler(conv_ask_question)
+
+    # ========== СПЕЦИФИЧНЫЕ ОБРАБОТЧИКИ CALLBACK ==========
+    # Эти обработчики должны быть зарегистрированы до общего обработчика
+    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
     application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_\\d+$"))
     application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_\\d+$"))
-    
-    # 2. Затем обработчик для кнопки "Я выполнил задание"
-    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_[a-zA-Z0-9]+$"))
-    
-    # 3. Затем все остальные специфичные паттерны из main_button_handler
-    #   但它们 уже обрабатываются в main_button_handler
 
     # ========== ГЛАВНЫЙ ОБРАБОТЧИК КНОПОК ==========
-    # Этот обработчик должен быть ПОСЛЕДНИМ, так как он обрабатывает все остальные паттерны
     application.add_handler(CallbackQueryHandler(main_button_handler))
-    
+
     # ========== ОБРАБОТЧИК ОШИБОК ==========
     application.add_error_handler(error_handler)
 
