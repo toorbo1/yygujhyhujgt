@@ -82,16 +82,16 @@ class Database:
                 )
             ''')
             await conn.execute('''
-    CREATE TABLE IF NOT EXISTS payment_awaiting (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-        task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-        request_id INTEGER REFERENCES completion_requests(id) ON DELETE CASCADE,
-        created_at TIMESTAMP DEFAULT NOW(),
-        status TEXT DEFAULT 'waiting'
-    )
-''')
-                        # ---- Задания ----
+                CREATE TABLE IF NOT EXISTS payment_awaiting (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+                    request_id INTEGER REFERENCES completion_requests(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    status TEXT DEFAULT 'waiting'
+                )
+            ''')
+            # ---- Задания ----
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS tasks (
                     task_id TEXT PRIMARY KEY,
@@ -223,6 +223,13 @@ class UserManager:
                     ON CONFLICT (date) DO UPDATE SET new_users = stats.new_users + 1
                 ''')
                 user = await conn.fetchrow('SELECT * FROM users WHERE user_id = $1', user_id)
+            else:
+                # Обновляем username/first_name, если они изменились
+                await conn.execute(
+                    'UPDATE users SET username = $2, first_name = $3 WHERE user_id = $1',
+                    user_id, username, first_name
+                )
+                user = await conn.fetchrow('SELECT * FROM users WHERE user_id = $1', user_id)
             return dict(user)
 
     @staticmethod
@@ -272,17 +279,11 @@ class AdminManager:
     async def is_admin(user_id: int) -> bool:
         # Главный админ всегда админ
         if user_id == AdminManager.MAIN_ADMIN_ID:
-            logger.info(f"Пользователь {user_id} является главным администратором")
             return True
 
         async with Database._pool.acquire() as conn:
-            user = await conn.fetchrow('SELECT user_id, is_admin FROM users WHERE user_id = $1', user_id)
-            if user is None:
-                logger.warning(f"Пользователь {user_id} не найден в базе данных")
-                return False
-            is_admin_value = user['is_admin']
-            logger.info(f"Пользователь {user_id}, is_admin из БД: {is_admin_value} (тип: {type(is_admin_value)})")
-            return bool(is_admin_value) if is_admin_value is not None else False
+            user = await conn.fetchrow('SELECT is_admin FROM users WHERE user_id = $1', user_id)
+            return bool(user['is_admin']) if user else False
 
     @staticmethod
     async def is_main_admin(user_id: int) -> bool:
@@ -499,6 +500,27 @@ class TaskManager:
             ''')
             return [dict(r) for r in rows]
 
+    @staticmethod
+    async def delete_task(task_id: str, admin_id: int) -> bool:
+        """Удаление задания администратором (полное удаление из БД)"""
+        async with Database.transaction() as conn:
+            # Проверяем, существует ли задание
+            task = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1', task_id)
+            if not task:
+                return False
+            
+            # Удаляем связанные записи
+            await conn.execute('DELETE FROM user_tasks WHERE task_id = $1', task_id)
+            await conn.execute('DELETE FROM pending_links WHERE task_id = $1', task_id)
+            await conn.execute('DELETE FROM completion_requests WHERE task_id = $1', task_id)
+            await conn.execute('DELETE FROM tracking_links WHERE task_id = $1', task_id)
+            await conn.execute('DELETE FROM payment_awaiting WHERE task_id = $1', task_id)
+            
+            # Удаляем само задание
+            await conn.execute('DELETE FROM tasks WHERE task_id = $1', task_id)
+            logger.info(f"✅ Задание {task_id} удалено администратором {admin_id}")
+            return True
+
 
 class TrackingManager:
     @staticmethod
@@ -593,6 +615,7 @@ class StatsManager:
             ''', days)
             return [dict(r) for r in rows]
 
+
 class CompletionManager:
     """Управление запросами на подтверждение выполнения заданий"""
 
@@ -637,126 +660,79 @@ class CompletionManager:
             row = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1', request_id)
             return dict(row) if row else None
 
-@staticmethod
-async def approve_request(request_id: int, admin_id: int) -> bool:
-    """Подтверждает выполнение, возвращает True если успешно"""
-    logger.info(f"🔍 CompletionManager.approve_request: request_id={request_id}, admin_id={admin_id}")
-    
-    try:
-        async with Database.transaction() as conn:
-            # Получаем запрос с блокировкой
-            req = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1 FOR UPDATE', request_id)
-            
-            if not req:
-                logger.error(f"❌ Запрос {request_id} не найден в БД")
-                return False
-                
-            logger.info(f"📊 Найден запрос: {dict(req)}")
-            
-            if req['status'] != 'pending':
-                logger.error(f"❌ Запрос {request_id} имеет статус {req['status']}, ожидался pending")
-                return False
+    @staticmethod
+    async def approve_request(request_id: int, admin_id: int) -> bool:
+        """Подтверждает выполнение, переводит задание в статус ожидания оплаты"""
+        logger.info(f"🔍 CompletionManager.approve_request: request_id={request_id}, admin_id={admin_id}")
+        try:
+            async with Database.transaction() as conn:
+                # Получаем запрос с блокировкой
+                req = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1 FOR UPDATE', request_id)
+                if not req:
+                    logger.error(f"❌ Запрос {request_id} не найден")
+                    return False
+                if req['status'] != 'pending':
+                    logger.error(f"❌ Запрос {request_id} имеет статус {req['status']}")
+                    return False
 
-            # Обновляем статус запроса
-            await conn.execute('''
-                UPDATE completion_requests
-                SET status = 'approved', admin_id = $2, processed_date = NOW()
-                WHERE id = $1
-            ''', request_id, admin_id)
-            
-            logger.info(f"✅ Запрос {request_id} обновлен на approved")
-            
-            # Получаем информацию о задании
-            task_id = req['task_id']
-            user_id = req['user_id']
-            
-            task = await conn.fetchrow('SELECT * FROM tasks WHERE task_id = $1', task_id)
-            if not task:
-                logger.error(f"❌ Задание {task_id} не найдено")
-                return False
-                
-            logger.info(f"📋 Найдено задание: {task['title']}, награда: {task['reward']}")
-            
-            # Проверим, не завершено ли уже задание
-            if task.get('completed'):
-                logger.info(f"⚠️ Задание {task_id} уже завершено")
-                return True  # Возвращаем True, так как запрос уже обработан
-            
-            # Обновляем задание - НЕ завершаем его полностью, а только отмечаем как одобренное
-            # Мы не должны здесь завершать задание, потому что это происходит после получения данных карты
-            await conn.execute('''
-                UPDATE tasks
-                SET 
-                    active = FALSE
-                WHERE task_id = $1
-            ''', task_id)
-            
-            # Обновляем статус в user_tasks на 'awaiting_payment'
-            await conn.execute('''
-                UPDATE user_tasks
-                SET status = 'awaiting_payment'
-                WHERE user_id = $2 AND task_id = $1
-            ''', task_id, user_id)
-            
-            logger.info(f"✅ Статус user_tasks обновлен на awaiting_payment для пользователя {user_id}")
-            
-            return True
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка в approve_request: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False
-@staticmethod
-async def reject_request(request_id: int, admin_id: int) -> bool:
-    """Отклоняет запрос"""
-    logger.info(f"🔍 CompletionManager.reject_request: request_id={request_id}, admin_id={admin_id}")
-    
-    try:
-        async with Database.transaction() as conn:
-            # Получаем запрос с блокировкой
-            req = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1 FOR UPDATE', request_id)
-            
-            if not req:
-                logger.error(f"❌ Запрос {request_id} не найден в БД")
-                return False
-                
-            if req['status'] != 'pending':
-                logger.error(f"❌ Запрос {request_id} имеет статус {req['status']}, ожидался pending")
-                return False
-            
-            # Обновляем статус запроса
-            result = await conn.execute('''
-                UPDATE completion_requests
-                SET status = 'rejected', admin_id = $2, processed_date = NOW()
-                WHERE id = $1 AND status = 'pending'
-            ''', request_id, admin_id)
-            
-            # Возвращаем задание обратно в доступные
-            task_id = req['task_id']
-            user_id = req['user_id']
-            
-            await conn.execute('''
-                UPDATE tasks 
-                SET taken_by = NULL, available = TRUE, active = TRUE
-                WHERE task_id = $1
-            ''', task_id)
-            
-            await conn.execute('''
-                DELETE FROM user_tasks 
-                WHERE user_id = $2 AND task_id = $1
-            ''', task_id, user_id)
-            
-            logger.info(f"✅ Запрос {request_id} отклонен, задание {task_id} возвращено в доступные")
-            
-            return result == "UPDATE 1"
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка в reject_request: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False
-        
+                # Обновляем статус запроса
+                await conn.execute('''
+                    UPDATE completion_requests
+                    SET status = 'approved', admin_id = $2, processed_date = NOW()
+                    WHERE id = $1
+                ''', request_id, admin_id)
+
+                # Обновляем статус в user_tasks на 'awaiting_payment'
+                await conn.execute('''
+                    UPDATE user_tasks
+                    SET status = 'awaiting_payment'
+                    WHERE user_id = $2 AND task_id = $1
+                ''', req['task_id'], req['user_id'])
+
+                logger.info(f"✅ Запрос {request_id} одобрен, задание переведено в awaiting_payment")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка в approve_request: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
+    @staticmethod
+    async def reject_request(request_id: int, admin_id: int) -> bool:
+        """Отклоняет запрос, возвращает задание в доступные"""
+        logger.info(f"🔍 CompletionManager.reject_request: request_id={request_id}, admin_id={admin_id}")
+        try:
+            async with Database.transaction() as conn:
+                req = await conn.fetchrow('SELECT * FROM completion_requests WHERE id = $1 FOR UPDATE', request_id)
+                if not req or req['status'] != 'pending':
+                    return False
+
+                # Обновляем статус запроса
+                await conn.execute('''
+                    UPDATE completion_requests
+                    SET status = 'rejected', admin_id = $2, processed_date = NOW()
+                    WHERE id = $1
+                ''', request_id, admin_id)
+
+                # Возвращаем задание обратно в доступные
+                await conn.execute('''
+                    UPDATE tasks 
+                    SET taken_by = NULL, available = TRUE, active = TRUE
+                    WHERE task_id = $1
+                ''', req['task_id'])
+
+                await conn.execute('''
+                    DELETE FROM user_tasks 
+                    WHERE user_id = $2 AND task_id = $1
+                ''', req['task_id'], req['user_id'])
+
+                logger.info(f"✅ Запрос {request_id} отклонен, задание возвращено")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка в reject_request: {e}")
+            return False
+
+
 class PaymentAwaitingManager:
     @staticmethod
     async def add(user_id: int, task_id: str, request_id: int) -> int:
