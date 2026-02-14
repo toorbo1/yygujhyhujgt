@@ -2136,7 +2136,8 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         name="ask_question_conv",
-        allow_reentry=True
+        allow_reentry=True,
+        persistent=False  # Добавляем для надежности
     )
     application.add_handler(ask_question_conv)
 
@@ -2148,7 +2149,8 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         name="admin_reply_conv",
-        allow_reentry=True
+        allow_reentry=True,
+        persistent=False
     )
     application.add_handler(admin_reply_conv)
 
@@ -2159,7 +2161,8 @@ def main():
             BROADCAST_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_text)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        name="broadcast_conv"
+        name="broadcast_conv",
+        persistent=False
     )
     application.add_handler(broadcast_conv)
 
@@ -2171,7 +2174,8 @@ def main():
             REMOVE_TASK_TASK_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_user_task_task_id)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        name="remove_task_conv"
+        name="remove_task_conv",
+        persistent=False
     )
     application.add_handler(remove_task_conv)
 
@@ -2183,7 +2187,8 @@ def main():
             ADD_ADMIN_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_admin_username)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        name="add_admin_conv"
+        name="add_admin_conv",
+        persistent=False
     )
     application.add_handler(conv_add_admin)
 
@@ -2195,7 +2200,8 @@ def main():
             CATEGORY_PARENT: [CallbackQueryHandler(add_category_parent, pattern="^(cat_parent_none|cat_parent_\\d+|cat_parent_select|cancel_category)$")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        name="add_category_conv"
+        name="add_category_conv",
+        persistent=False
     )
     application.add_handler(conv_add_category)
 
@@ -2215,7 +2221,8 @@ def main():
             TASK_CATEGORY: [CallbackQueryHandler(create_task_category_callback, pattern="^task_cat_")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        name="create_task_conv"
+        name="create_task_conv",
+        persistent=False
     )
     application.add_handler(conv_create_task)
 
@@ -2236,6 +2243,7 @@ def main():
     application.add_handler(CommandHandler("check_admin", check_admin_command))
 
     # ========== 4. ПОТОМ ОБЩИЙ ОБРАБОТЧИК КНОПОК (САМЫЙ НИЗКИЙ ПРИОРИТЕТ) ==========
+    # Важно: этот обработчик должен перехватывать ВСЕ остальные callback'и
     application.add_handler(CallbackQueryHandler(main_button_handler))
 
     # ========== 5. ПОТОМ ОБРАБОТЧИКИ СООБЩЕНИЙ ==========
