@@ -1740,11 +1740,30 @@ def main():
     
     # Обработчик ошибок
     application.add_error_handler(error_handler)
+    # ========== СПЕЦИФИЧНЫЕ ОБРАБОТЧИКИ ==========
+    # Эти обработчики должны быть ДО main_button_handler!
+    
+    # Для отладки - временный принт
+    print("✅ Регистрирую обработчики complete_, approve_, reject_")
+    
+    application.add_handler(CallbackQueryHandler(complete_task_callback, pattern="^complete_"))
+    application.add_handler(CallbackQueryHandler(approve_request_callback, pattern="^approve_"))
+    application.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_"))
+    
+    # Команда для просмотра ожидающих запросов
+    application.add_handler(CommandHandler("pending_completions", pending_completions_command))
+
+    # Главный обработчик (ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ!)
+    application.add_handler(CallbackQueryHandler(main_button_handler))
+    
+    application.add_error_handler(error_handler)
 
     logger.info("🚀 Запуск бота...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("🚀 Запуск бота...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-    
+
     # ConversationHandler для создания задания
     conv_create_task = ConversationHandler(
         entry_points=[
